@@ -116,6 +116,49 @@ func TestAccessConnectorValidationAndListing(t *testing.T) {
 	}
 }
 
+func TestAccessConnectorRejectsLocationChange(t *testing.T) {
+	m := newMock(t)
+	ctx := context.Background()
+
+	if _, err := m.CreateOrUpdateAccessConnector(ctx, driver.AccessConnectorConfig{
+		Name: "ac1", ResourceGroup: "rg", Location: "eastus",
+		Tags: map[string]string{"env": "test"},
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// A PUT that changes the location of an existing connector is rejected, as
+	// real Azure ARM does (400), rather than silently ignored.
+	if _, err := m.CreateOrUpdateAccessConnector(ctx, driver.AccessConnectorConfig{
+		Name: "ac1", ResourceGroup: "rg", Location: "westus",
+	}); !errors.IsInvalidArgument(err) {
+		t.Fatalf("location change = %v, want InvalidArgument", err)
+	}
+
+	// The stored location is unchanged after the rejected PUT.
+	got, err := m.GetAccessConnector(ctx, "rg", "ac1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	if got.Location != "eastus" {
+		t.Fatalf("location = %q after rejected change, want eastus", got.Location)
+	}
+
+	// A same-location PUT is still an idempotent update: new tags are applied.
+	upd, err := m.CreateOrUpdateAccessConnector(ctx, driver.AccessConnectorConfig{
+		Name: "ac1", ResourceGroup: "rg", Location: "eastus",
+		Tags: map[string]string{"env": "prod"},
+	})
+	if err != nil {
+		t.Fatalf("same-location update: %v", err)
+	}
+
+	if upd.Tags["env"] != "prod" {
+		t.Fatalf("same-location update tags = %+v, want env=prod", upd.Tags)
+	}
+}
+
 // --- Private endpoint connections ---
 
 func TestPrivateEndpointConnectionLifecycle(t *testing.T) {

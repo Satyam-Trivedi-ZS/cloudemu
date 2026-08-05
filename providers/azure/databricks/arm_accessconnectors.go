@@ -40,7 +40,13 @@ func (m *Mock) CreateOrUpdateAccessConnector(
 	if existing, ok := m.accessConnectors.Get(k); ok {
 		// ARM PUT is create-or-update: apply the mutable fields to a copy and
 		// swap it in, preserving identity fields (ID, created time). Location is
-		// immutable in real Azure, so it is left untouched.
+		// immutable in real Azure: a same-location PUT is an idempotent update
+		// (tags/identity), but changing the location is rejected with a 400
+		// rather than silently ignored.
+		if cfg.Location != existing.Location {
+			return nil, errors.New(errors.InvalidArgument, "changing 'location' of an existing access connector is not allowed")
+		}
+
 		updated := *existing
 		updated.Tags = copyMap(cfg.Tags)
 		updated.Identity = resolveIdentity(cfg.Identity, cfg.ResourceGroup, cfg.Name)

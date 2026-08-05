@@ -186,6 +186,30 @@ func TestSDKAccessConnectorEmptyLocation(t *testing.T) {
 	}
 }
 
+func TestSDKAccessConnectorRejectsLocationChange(t *testing.T) {
+	client := newAccessConnectorsClient(t)
+	ctx := context.Background()
+
+	const name = "conn-loc"
+
+	createAccessConnector(t, client, name, armdatabricks.AccessConnector{
+		Location: to.Ptr("eastus"),
+	})
+
+	// Changing the location of an existing connector is rejected with a 400.
+	// The error may surface at BeginCreateOrUpdate or during PollUntilDone.
+	poller, err := client.BeginCreateOrUpdate(ctx, testRG, name, armdatabricks.AccessConnector{
+		Location: to.Ptr("westus"),
+	}, nil)
+	if err != nil {
+		return
+	}
+
+	if _, err = poller.PollUntilDone(ctx, nil); err == nil {
+		t.Fatal("expected error changing location of an existing connector")
+	}
+}
+
 func TestSDKAccessConnectorListByResourceGroup(t *testing.T) {
 	client := newAccessConnectorsClient(t)
 	ctx := context.Background()
