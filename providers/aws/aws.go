@@ -637,9 +637,9 @@ func awsDrivers(p *Provider) *resourcediscovery.Drivers {
 // background ticker calls each one on its interval. New time-driven services
 // register here.
 func (p *Provider) Tickables() []config.Tickable {
-	// EFS runs before CloudWatch so the alarms evaluated in the same tick see
-	// the AWS/EFS metrics it just published.
-	return []config.Tickable{p.EFS, p.CloudWatch, p.SSM, p.CloudFormation}
+	// SQS and EFS run before CloudWatch so the alarms evaluated in the same
+	// tick see the queue gauges and AWS/EFS metrics they just published.
+	return []config.Tickable{p.SQS, p.EFS, p.CloudWatch, p.SSM, p.CloudFormation}
 }
 
 // Close tears down any real engines wired into the provider via
