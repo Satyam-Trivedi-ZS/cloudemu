@@ -69,48 +69,56 @@ func mapArray(arr []Labeled, f func(result) result) result {
 	return result{isArray: true, array: out}
 }
 
-// pointFunc combines two values into one.
-type pointFunc func(a, b float64) float64
+// pointFunc combines two values into one. ok is false when the point is
+// dropped, as a division by zero is.
+type pointFunc func(a, b float64) (v float64, ok bool)
 
 // pointwise applies f to two operands. A scalar operand is used against every
 // point of the other one, and an array operand is combined series by series.
-// With union set, a timestamp only one series has counts as 0 in the other,
-// as metric-math comparison and logical operators do. Without it the point is
-// dropped.
-func pointwise(f pointFunc, left, right *result, union bool) result {
+// A timestamp only one series has counts as 0 in the other, which is the
+// rule the user guide gives for arithmetic ("Missing values in a time series
+// are treated as 0") and for comparison operators.
+func pointwise(f pointFunc, left, right *result) result {
 	switch {
 	case left.isArray && right.isArray:
 		// TS[] op TS[] is not a documented form.
 		return result{series: emptySeries()}
 	case left.isArray:
-		return mapArray(left.array, func(l result) result { return pointwise(f, &l, right, union) })
+		return mapArray(left.array, func(l result) result { return pointwise(f, &l, right) })
 	case right.isArray:
-		return mapArray(right.array, func(r result) result { return pointwise(f, left, &r, union) })
+		return mapArray(right.array, func(r result) result { return pointwise(f, left, &r) })
 	case left.isScalar && right.isScalar:
-		return result{isScalar: true, scalar: f(left.scalar, right.scalar)}
+		v, ok := f(left.scalar, right.scalar)
+		if !ok {
+			return result{series: emptySeries()}
+		}
+
+		return result{isScalar: true, scalar: v}
 	case left.isScalar:
 		return result{series: scalarSeries(f, left.scalar, right.series, true)}
 	case right.isScalar:
 		return result{series: scalarSeries(f, right.scalar, left.series, false)}
-	case union:
-		return result{series: unionSeries(f, left.series, right.series)}
 	default:
-		return result{series: intersectSeries(f, left.series, right.series)}
+		return result{series: unionSeries(f, left.series, right.series)}
 	}
 }
 
 func scalarSeries(f pointFunc, scalar float64, s Series, scalarLeft bool) Series {
-	values := make([]float64, len(s.Values))
+	out := Series{Timestamps: make([]time.Time, 0, len(s.Values)), Values: make([]float64, 0, len(s.Values))}
 
 	for i, v := range s.Values {
+		a, b := v, scalar
 		if scalarLeft {
-			values[i] = f(scalar, v)
-		} else {
-			values[i] = f(v, scalar)
+			a, b = scalar, v
+		}
+
+		if r, ok := f(a, b); ok {
+			out.Timestamps = append(out.Timestamps, s.Timestamps[i])
+			out.Values = append(out.Values, r)
 		}
 	}
 
-	return Series{Timestamps: s.Timestamps, Values: values}
+	return out
 }
 
 // valuesAt indexes a series by timestamp.
@@ -123,26 +131,6 @@ func valuesAt(s Series) map[int64]float64 {
 	return at
 }
 
-// intersectSeries combines the points two series share a timestamp at. A
-// point with no partner is dropped, so a gap in one input never shifts the
-// other.
-func intersectSeries(f pointFunc, left, right Series) Series {
-	rightAt := valuesAt(right)
-	out := emptySeries()
-
-	for i, ts := range left.Timestamps {
-		rv, ok := rightAt[ts.UnixNano()]
-		if !ok {
-			continue
-		}
-
-		out.Timestamps = append(out.Timestamps, ts)
-		out.Values = append(out.Values, f(left.Values[i], rv))
-	}
-
-	return out
-}
-
 // unionSeries combines two series at every timestamp either has, reading a
 // missing point as 0, in time order.
 func unionSeries(f pointFunc, left, right Series) Series {
@@ -151,8 +139,10 @@ func unionSeries(f pointFunc, left, right Series) Series {
 	out := Series{Timestamps: make([]time.Time, 0, len(stamps)), Values: make([]float64, 0, len(stamps))}
 
 	for _, ts := range stamps {
-		out.Timestamps = append(out.Timestamps, ts)
-		out.Values = append(out.Values, f(leftAt[ts.UnixNano()], rightAt[ts.UnixNano()]))
+		if v, ok := f(leftAt[ts.UnixNano()], rightAt[ts.UnixNano()]); ok {
+			out.Timestamps = append(out.Timestamps, ts)
+			out.Values = append(out.Values, v)
+		}
 	}
 
 	return out
@@ -183,25 +173,28 @@ func mergeTimestamps(lists ...[]time.Time) []time.Time {
 
 // arithmetic returns the point function of an arithmetic operator.
 func arithmetic(op byte) pointFunc {
-	return func(a, b float64) float64 { return applyOp(op, a, b) }
+	return func(a, b float64) (float64, bool) { return applyOp(op, a, b) }
 }
 
-func applyOp(op byte, a, b float64) float64 {
+// applyOp applies an arithmetic operator. A division by zero drops the
+// point, which is the user guide's rule for a data point that would divide
+// by zero.
+func applyOp(op byte, a, b float64) (float64, bool) {
 	switch op {
 	case '+':
-		return a + b
+		return a + b, true
 	case '-':
-		return a - b
+		return a - b, true
 	case '*':
-		return a * b
+		return a * b, true
 	case '/':
 		if b == 0 {
-			return 0
+			return 0, false
 		}
 
-		return a / b
+		return a / b, true
 	default:
-		return 0
+		return 0, false
 	}
 }
 
@@ -216,22 +209,22 @@ func truth(b bool) float64 {
 
 // comparison returns the point function of a comparison operator.
 func comparison(op string) pointFunc {
-	return func(a, b float64) float64 {
+	return func(a, b float64) (float64, bool) {
 		switch op {
 		case opEq:
-			return truth(a == b)
+			return truth(a == b), true
 		case opNe:
-			return truth(a != b)
+			return truth(a != b), true
 		case opLt:
-			return truth(a < b)
+			return truth(a < b), true
 		case opLe:
-			return truth(a <= b)
+			return truth(a <= b), true
 		case opGt:
-			return truth(a > b)
+			return truth(a > b), true
 		case opGe:
-			return truth(a >= b)
+			return truth(a >= b), true
 		default:
-			return 0
+			return 0, false
 		}
 	}
 }
@@ -285,7 +278,7 @@ func (n negNode) evaluate(s scope) (result, error) {
 		return result{}, err
 	}
 
-	return pointwise(arithmetic('-'), &result{isScalar: true}, &v, false), nil
+	return pointwise(arithmetic('-'), &result{isScalar: true}, &v), nil
 }
 
 type binaryNode struct {
@@ -299,7 +292,7 @@ func (n binaryNode) evaluate(s scope) (result, error) {
 		return result{}, err
 	}
 
-	return pointwise(arithmetic(n.op), &left, &right, false), nil
+	return pointwise(arithmetic(n.op), &left, &right), nil
 }
 
 // compareNode is a comparison. Each point is 1 when it holds and 0 when not.
@@ -314,7 +307,7 @@ func (n compareNode) evaluate(s scope) (result, error) {
 		return result{}, err
 	}
 
-	return pointwise(comparison(n.op), &left, &right, true), nil
+	return pointwise(comparison(n.op), &left, &right), nil
 }
 
 // logicNode is AND or OR. A non-zero value is true.
@@ -329,15 +322,15 @@ func (n logicNode) evaluate(s scope) (result, error) {
 		return result{}, err
 	}
 
-	f := func(a, b float64) float64 {
+	f := func(a, b float64) (float64, bool) {
 		if n.and {
-			return truth(a != 0 && b != 0)
+			return truth(a != 0 && b != 0), true
 		}
 
-		return truth(a != 0 || b != 0)
+		return truth(a != 0 || b != 0), true
 	}
 
-	return pointwise(f, &left, &right, true), nil
+	return pointwise(f, &left, &right), nil
 }
 
 func evalPair(s scope, a, b node) (left, right result, err error) {
