@@ -172,3 +172,42 @@ func TestSDKGetMetricDataFILLOverSEARCHNoPeriod(t *testing.T) {
 		})
 	}
 }
+
+// TestSDKGetMetricDataArithmeticMissingAsZero drives the user guide's series,
+// metric1 [30, 20, 0, 0] and metric2 [20, -, 20, -], through GetMetricData:
+// arithmetic reads a missing point as 0, and division by zero drops the point.
+func TestSDKGetMetricDataArithmeticMissingAsZero(t *testing.T) {
+	client, ctx := newCWClient(t)
+
+	start := time.Now().UTC().Truncate(time.Minute).Add(-10 * time.Minute)
+	for i, v := range []float64{30, 20, 0, 0} {
+		putPoint(ctx, t, client, "ArithApp", "M1", nil, v, start.Add(time.Duration(i)*time.Minute))
+	}
+
+	putPoint(ctx, t, client, "ArithApp", "M2", nil, 20, start)
+	putPoint(ctx, t, client, "ArithApp", "M2", nil, 20, start.Add(2*time.Minute))
+
+	out, err := client.GetMetricData(ctx, &awscw.GetMetricDataInput{
+		StartTime: aws.Time(start),
+		EndTime:   aws.Time(start.Add(4 * time.Minute)),
+		ScanBy:    cwtypes.ScanByTimestampAscending,
+		MetricDataQueries: []cwtypes.MetricDataQuery{
+			metricQuery("m1", "ArithApp", "M1"),
+			metricQuery("m2", "ArithApp", "M2"),
+			{Id: aws.String("diff"), Expression: aws.String("m1 - m2")},
+			{Id: aws.String("ratio"), Expression: aws.String("m1 / m2")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("GetMetricData: %v", err)
+	}
+
+	want := map[string][]float64{"diff": {10, 20, -20, 0}, "ratio": {1.5, 0}}
+
+	for _, r := range out.MetricDataResults {
+		id := aws.ToString(r.Id)
+		if !floatsEqual(r.Values, want[id]) {
+			t.Errorf("%s values = %v, want %v", id, r.Values, want[id])
+		}
+	}
+}
