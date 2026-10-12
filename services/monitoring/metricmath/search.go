@@ -55,19 +55,34 @@ type searchNode struct {
 // two weeks.
 type Lister func() ([]driver.MetricIdentifier, error)
 
+// defaultSearchPeriod is the period a SEARCH reads at when neither its own
+// period argument nor its entry gives one. It is the period a metric read
+// with no period uses (60 seconds), so FILL fills on the step the series has.
+const defaultSearchPeriod = 60
+
+// effectivePeriod is the period the search reads at: its period argument,
+// else the period of the entry, else defaultSearchPeriod.
+func (n searchNode) effectivePeriod(s scope) int {
+	switch {
+	case n.period > 0:
+		return n.period
+	case s.gridPeriod > 0:
+		return s.gridPeriod
+	default:
+		return defaultSearchPeriod
+	}
+}
+
 func (n searchNode) evaluate(s scope) (result, error) {
+	period := n.effectivePeriod(s)
+
 	if s.e.lister == nil {
-		return result{isArray: true, array: []Labeled{}}, nil
+		return result{isArray: true, array: []Labeled{}, period: period}, nil
 	}
 
 	metrics, err := s.e.lister()
 	if err != nil {
 		return result{}, err
-	}
-
-	period := n.period
-	if period == 0 {
-		period = s.gridPeriod
 	}
 
 	out := []Labeled{}
@@ -88,7 +103,7 @@ func (n searchNode) evaluate(s scope) (result, error) {
 		out = append(out, Labeled{Label: searchLabel(m), Series: series})
 	}
 
-	return result{isArray: true, array: out}, nil
+	return result{isArray: true, array: out, period: period}, nil
 }
 
 // searchLabel is the label of one found metric: its dimension values in
@@ -313,7 +328,7 @@ func tokenBoundary(r []rune, i int) bool {
 	}
 }
 
-// ---- search string parser ----
+// The search string parser.
 
 // Search token kinds.
 const (

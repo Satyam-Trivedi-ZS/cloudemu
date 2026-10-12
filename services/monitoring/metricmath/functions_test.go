@@ -313,3 +313,43 @@ func TestFILLOverSEARCH(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, s.Values)
 }
+
+// TestFILLOverSEARCHUsesSearchPeriod fills a SEARCH on the period it reads
+// at when the entry has no Period: its period argument, else 60 seconds.
+func TestFILLOverSEARCHUsesSearchPeriod(t *testing.T) {
+	tests := []struct {
+		name       string
+		expr       string
+		wantPeriod int
+		wantPoints int
+	}{
+		{"period argument", `FILL(SEARCH('{App,Host} MetricName="Hits"', 'Sum', 300), 0)`, 300, 2},
+		{"default period", `FILL(SEARCH('{App,Host} MetricName="Hits"', 'Sum'), 0)`, 60, 10},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var periods []int
+
+			fetch := func(_ *driver.MetricStat, p int) (metricmath.Series, error) {
+				periods = append(periods, p)
+
+				return metricmath.Series{Timestamps: at(0), Values: []float64{1}}, nil
+			}
+
+			queries := []driver.MetricDataQuery{{ID: "e1", Expression: tc.expr}}
+			ev := metricmath.New(queries, fetch).WithRange(base, base.Add(10*time.Minute)).
+				WithSearch(func() ([]driver.MetricIdentifier, error) {
+					return []driver.MetricIdentifier{
+						{Namespace: "App", MetricName: "Hits", Dimensions: map[string]string{"Host": "a"}},
+					}, nil
+				})
+
+			got, err := ev.ResolveAll("e1")
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			assert.Equal(t, []int{tc.wantPeriod}, periods)
+			assert.Len(t, got[0].Values, tc.wantPoints)
+		})
+	}
+}

@@ -128,3 +128,47 @@ func TestSDKGetMetricDataSEARCH(t *testing.T) {
 		}
 	}
 }
+
+// TestSDKGetMetricDataFILLOverSEARCHNoPeriod fills a SEARCH on the step the
+// SEARCH reads at when the query has no Period: the SEARCH's own period
+// argument, else 60 seconds.
+func TestSDKGetMetricDataFILLOverSEARCHNoPeriod(t *testing.T) {
+	client, ctx := newCWClient(t)
+
+	start := time.Now().UTC().Truncate(time.Minute).Add(-30 * time.Minute)
+	putPoint(ctx, t, client, "FillSearch", "Hits", map[string]string{"Host": "a"}, 4, start.Add(5*time.Minute))
+
+	tests := []struct {
+		name string
+		expr string
+		want []float64
+	}{
+		{"explicit period", `FILL(SEARCH('{FillSearch,Host} MetricName="Hits"', 'Sum', 300), 0)`, []float64{0, 4, 0, 0}},
+		{"default period", `FILL(SEARCH('{FillSearch,Host} MetricName="Hits"', 'Sum'), 0)`,
+			[]float64{0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := client.GetMetricData(ctx, &awscw.GetMetricDataInput{
+				StartTime: aws.Time(start),
+				EndTime:   aws.Time(start.Add(20 * time.Minute)),
+				ScanBy:    cwtypes.ScanByTimestampAscending,
+				MetricDataQueries: []cwtypes.MetricDataQuery{
+					{Id: aws.String("f1"), Expression: aws.String(tc.expr)},
+				},
+			})
+			if err != nil {
+				t.Fatalf("GetMetricData: %v", err)
+			}
+
+			if len(out.MetricDataResults) != 1 {
+				t.Fatalf("results = %d, want 1", len(out.MetricDataResults))
+			}
+
+			if got := out.MetricDataResults[0].Values; !floatsEqual(got, tc.want) {
+				t.Fatalf("values = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -147,10 +147,20 @@ func (n fillNode) evaluate(s scope) (result, error) {
 		return result{}, err
 	}
 
-	grid := s.e.grid(s.gridPeriod)
+	// FILL fills on the step of its input: the period a SEARCH read at, else
+	// the period of the expression.
+	step := s.gridPeriod
+	if in.period > 0 {
+		step = in.period
+	}
+
+	grid := s.e.grid(step)
 
 	if in.isArray {
-		return mapArray(in.array, func(r result) result { return result{series: f.apply(r.series, grid)} }), nil
+		out := mapArray(in.array, func(r result) result { return result{series: f.apply(r.series, grid)} })
+		out.period = in.period
+
+		return out, nil
 	}
 
 	return result{series: f.apply(in.series, grid)}, nil
