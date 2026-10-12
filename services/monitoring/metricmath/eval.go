@@ -21,6 +21,9 @@ type result struct {
 	series   Series
 	isArray  bool
 	array    []Labeled
+	// period is the step, in seconds, of the series of an array when the
+	// expression that made it knows it, such as a SEARCH. Zero when unknown.
+	period int
 }
 
 func emptySeries() Series {
