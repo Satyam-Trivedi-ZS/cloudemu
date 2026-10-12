@@ -143,7 +143,7 @@ func (h *Handler) describeSavingsPlans(w http.ResponseWriter, r *http.Request) {
 		SavingsPlanIDs  []string     `json:"savingsPlanIds"`
 		SavingsPlanArns []string     `json:"savingsPlanArns"`
 		States          []string     `json:"states"`
-		MaxResults      int          `json:"maxResults"`
+		MaxResults      *int         `json:"maxResults"`
 		NextToken       string       `json:"nextToken"`
 	}
 
@@ -153,7 +153,14 @@ func (h *Handler) describeSavingsPlans(w http.ResponseWriter, r *http.Request) {
 
 	f := newPlanFilter(req.SavingsPlanIDs, req.SavingsPlanArns, req.States, req.Filters)
 
-	plans, next, err := paginate(h.store.describe(f), req.MaxResults, req.NextToken)
+	// DescribeSavingsPlans documents maxResults 1-1000, so an explicit 0 is
+	// invalid; omitted returns every plan.
+	pr := pageRequest{minResults: 1, nextToken: req.NextToken}
+	if req.MaxResults != nil {
+		pr.maxResults, pr.set = *req.MaxResults, true
+	}
+
+	plans, next, err := paginate(h.store.describe(f), func(p *savingsPlan) string { return p.ID }, pr)
 	if err != nil {
 		writeErr(w, err)
 
@@ -203,7 +210,17 @@ func (h *Handler) describeOfferings(w http.ResponseWriter, r *http.Request) {
 		attrs:          req.Filters,
 	}
 
-	offerings, next, err := paginate(h.store.describeOfferings(f), req.MaxResults, req.NextToken)
+	matched, err := h.store.describeOfferings(f)
+	if err != nil {
+		writeErr(w, err)
+
+		return
+	}
+
+	// DescribeSavingsPlansOfferings documents maxResults 0-1000 (0 = all).
+	offerings, next, err := paginate(matched, func(o *offering) string { return o.id }, pageRequest{
+		maxResults: req.MaxResults, set: true, nextToken: req.NextToken,
+	})
 	if err != nil {
 		writeErr(w, err)
 

@@ -1,13 +1,21 @@
 package savingsplans
 
-import "strconv"
+import (
+	"strconv"
 
-// Offering filter / property names (SavingsPlanOfferingFilterAttribute and
-// SavingsPlanOfferingPropertyKey share the same enum: region | instanceFamily).
+	cerrors "github.com/stackshy/cloudemu/v2/errors"
+)
+
+// Offering filter / property names. SavingsPlanOfferingFilterAttribute and
+// SavingsPlanOfferingPropertyKey are the same closed enum: region |
+// instanceFamily. The region name is the shared filterRegion constant.
 // https://docs.aws.amazon.com/savingsplans/latest/APIReference/API_SavingsPlanOfferingFilterElement.html
+const offeringPropInstanceFamily = "instanceFamily"
+
+// propertyName / propertyValue are the SavingsPlanOfferingProperty member names.
 const (
-	offeringPropRegion         = "region"
-	offeringPropInstanceFamily = "instanceFamily"
+	propertyName  = "name"
+	propertyValue = "value"
 )
 
 // offeringFilter is the parsed DescribeSavingsPlansOfferings predicate. Every
@@ -25,6 +33,20 @@ type offeringFilter struct {
 	operations     map[string]struct{}
 	productType    string
 	attrs          []wireFilter
+}
+
+// validate rejects a filters[] name outside the closed
+// SavingsPlanOfferingFilterAttribute enum with ValidationException, so a typo
+// (e.g. "instancefamily") fails instead of silently matching every offering.
+func (f *offeringFilter) validate() error {
+	for _, attr := range f.attrs {
+		if attr.Name != filterRegion && attr.Name != offeringPropInstanceFamily {
+			return cerrors.Newf(cerrors.InvalidArgument,
+				"invalid filter name %q: must be one of [region, instanceFamily]", attr.Name)
+		}
+	}
+
+	return nil
 }
 
 // matches reports whether offering o satisfies the filter.
@@ -66,17 +88,12 @@ func (f *offeringFilter) matches(o *offering) bool {
 // offeringAttrMatches applies one filters[] element. The filter names are the
 // offering property keys, so an offering matches when it carries that property
 // with one of the requested values; an offering without the property (e.g. a
-// region-spanning Compute offering under a region filter) does not match. An
-// unknown filter name is tolerated (matches), like DescribeSavingsPlans.
+// region-spanning Compute offering under a region filter) does not match.
+// Filter names are checked by validate before matching.
 func offeringAttrMatches(o *offering, attr wireFilter) bool {
-	switch attr.Name {
-	case offeringPropRegion, offeringPropInstanceFamily:
-		got, ok := offeringProperties(o)[attr.Name]
+	got, ok := offeringProperties(o)[attr.Name]
 
-		return ok && containsValue(attr.Values, got)
-	default:
-		return true
-	}
+	return ok && containsValue(attr.Values, got)
 }
 
 // offeringProperties returns the SavingsPlanOfferingProperty set for o: region
@@ -86,7 +103,7 @@ func offeringProperties(o *offering) map[string]string {
 	props := map[string]string{}
 
 	if o.region != "" {
-		props[offeringPropRegion] = o.region
+		props[filterRegion] = o.region
 	}
 
 	if o.ec2Family != "" {

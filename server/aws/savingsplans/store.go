@@ -320,8 +320,13 @@ func (s *store) describe(f planFilter) []*savingsPlan {
 }
 
 // describeOfferings returns the seeded catalog offerings matching the filter, in
-// catalog order (deterministic, so offset pagination tokens stay stable).
-func (s *store) describeOfferings(f *offeringFilter) []*offering {
+// ascending offering-id order (the key the nextToken cursor pages on). A filter
+// name outside the documented enum is a ValidationException.
+func (s *store) describeOfferings(f *offeringFilter) ([]*offering, error) {
+	if err := f.validate(); err != nil {
+		return nil, err
+	}
+
 	out := make([]*offering, 0, len(s.offerings))
 
 	for i := range s.offerings {
@@ -330,7 +335,9 @@ func (s *store) describeOfferings(f *offeringFilter) []*offering {
 		}
 	}
 
-	return out
+	sort.Slice(out, func(i, j int) bool { return out[i].id < out[j].id })
+
+	return out, nil
 }
 
 // tagsOf returns a copy of a plan's tags, or nil if the plan is unknown.

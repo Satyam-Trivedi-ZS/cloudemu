@@ -198,9 +198,9 @@ func offeringToWire(o *offering) map[string]any {
 	if len(props) > 0 {
 		list := make([]map[string]any, 0, len(props))
 
-		for _, name := range []string{offeringPropRegion, offeringPropInstanceFamily} {
+		for _, name := range []string{filterRegion, offeringPropInstanceFamily} {
 			if v, ok := props[name]; ok {
-				list = append(list, map[string]any{"name": name, "value": v})
+				list = append(list, map[string]any{propertyName: name, propertyValue: v})
 			}
 		}
 

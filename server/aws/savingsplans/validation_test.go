@@ -10,7 +10,10 @@ import (
 func TestCreateRejectsOutOfRangeCommitment(t *testing.T) {
 	s, _ := newTestStore(t)
 
-	bad := []string{"0", "0.000", "-1", "-0.5", "0.0009", "1000000.01", "NaN", "Inf", "1.123456", "abc", ""}
+	bad := []string{
+		"0", "0.000", "-1", "-0.5", "0.0009", "1000000.01", "NaN", "Inf", "1.123456", "abc", "",
+		"1e2", "0x1p3", "+5", "1.23456e2", " 1", "1.", ".5",
+	}
 	for _, c := range bad {
 		t.Run(c, func(t *testing.T) {
 			_, err := s.create(&createInput{savingsPlanOfferingID: storeTestOffering, commitment: c})
@@ -20,7 +23,7 @@ func TestCreateRejectsOutOfRangeCommitment(t *testing.T) {
 		})
 	}
 
-	good := []string{"0.001", "1", "1.500", "0.12345", "1000000"}
+	good := []string{"0.001", "1", "1.500", "0.12345", "1000000", "123.456"}
 	for _, c := range good {
 		t.Run("ok_"+c, func(t *testing.T) {
 			if _, err := s.create(&createInput{savingsPlanOfferingID: storeTestOffering, commitment: c}); err != nil {
@@ -52,6 +55,9 @@ func TestTagsRejectInvalidKeys(t *testing.T) {
 		"empty key":  {"": "v"},
 		"long key":   {strings.Repeat("k", maxTagKeyLength+1): "v"},
 		"long value": {"k": strings.Repeat("v", maxTagValueLength+1)},
+		"aws: key":   {"aws:team": "v"},
+		"AWS: key":   {"AWS:team": "v"},
+		"Aws: key":   {"Aws:Team": "v"},
 	}
 	for name, tags := range cases {
 		if err := s.tag(arn, tags); !cerrors.IsInvalidArgument(err) {
@@ -69,35 +75,59 @@ func TestTagsRejectInvalidKeys(t *testing.T) {
 }
 
 func TestPaginate(t *testing.T) {
-	items := []int{1, 2, 3, 4, 5}
+	items := []string{"a", "b", "c", "d", "e"}
+	key := func(s string) string { return s }
+	pr := func(n int, token string) pageRequest {
+		return pageRequest{maxResults: n, minResults: 1, set: true, nextToken: token}
+	}
 
-	page, next, err := paginate(items, 2, "")
-	if err != nil || len(page) != 2 || page[0] != 1 || next == "" {
+	page, next, err := paginate(items, key, pr(2, ""))
+	if err != nil || strings.Join(page, "") != "ab" || next == "" {
 		t.Fatalf("page1 = %v next=%q err=%v", page, next, err)
 	}
 
-	page, next, err = paginate(items, 2, next)
-	if err != nil || len(page) != 2 || page[0] != 3 || next == "" {
+	page, next, err = paginate(items, key, pr(2, next))
+	if err != nil || strings.Join(page, "") != "cd" || next == "" {
 		t.Fatalf("page2 = %v next=%q err=%v", page, next, err)
 	}
 
-	page, next, err = paginate(items, 2, next)
-	if err != nil || len(page) != 1 || page[0] != 5 || next != "" {
+	page, next, err = paginate(items, key, pr(2, next))
+	if err != nil || strings.Join(page, "") != "e" || next != "" {
 		t.Fatalf("page3 = %v next=%q err=%v", page, next, err)
 	}
 
-	if page, next, err = paginate(items, 0, ""); err != nil || len(page) != 5 || next != "" {
-		t.Fatalf("unbounded = %v next=%q err=%v", page, next, err)
+	// Omitted maxResults returns everything.
+	if page, next, err = paginate(items, key, pageRequest{minResults: 1}); err != nil || len(page) != 5 || next != "" {
+		t.Fatalf("omitted = %v next=%q err=%v", page, next, err)
 	}
 
-	for _, n := range []int{-1, maxDescribePageResults + 1} {
-		if _, _, err := paginate(items, n, ""); !cerrors.IsInvalidArgument(err) {
-			t.Fatalf("maxResults %d: err = %v, want InvalidArgument", n, err)
+	// 0 is valid where the operation's minimum is 0 (offerings) and means all.
+	if page, _, err = paginate(items, key, pageRequest{set: true}); err != nil || len(page) != 5 {
+		t.Fatalf("maxResults 0 with min 0 = %v err=%v", page, err)
+	}
+
+	for _, n := range []int{-1, 0, maxDescribePageResults + 1} {
+		if _, _, err := paginate(items, key, pr(n, "")); !cerrors.IsInvalidArgument(err) {
+			t.Fatalf("maxResults %d (min 1): err = %v, want InvalidArgument", n, err)
 		}
 	}
 
-	if _, _, err := paginate(items, 1, "!!not-a-token"); !cerrors.IsInvalidArgument(err) {
-		t.Fatalf("bad token: err = %v, want InvalidArgument", err)
+	// "Mg==" is valid base64 ("2") but not a token this handler issued.
+	for _, tok := range []string{"!!not-a-token", "Mg=="} {
+		if _, _, err := paginate(items, key, pr(1, tok)); !cerrors.IsInvalidArgument(err) {
+			t.Fatalf("bad token %q: err = %v, want InvalidArgument", tok, err)
+		}
+	}
+}
+
+func TestDescribeOfferingsRejectsUnknownFilterNameStore(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	for _, name := range []string{"instancefamily", "Region", "bogus", ""} {
+		_, err := s.describeOfferings(&offeringFilter{attrs: []wireFilter{{Name: name, Values: []string{"x"}}}})
+		if !cerrors.IsInvalidArgument(err) {
+			t.Fatalf("filter name %q: err = %v, want InvalidArgument", name, err)
+		}
 	}
 }
 
@@ -105,8 +135,13 @@ func TestDescribeOfferingsFilters(t *testing.T) {
 	s, _ := newTestStore(t)
 
 	ids := func(f *offeringFilter) []string {
+		matched, err := s.describeOfferings(f)
+		if err != nil {
+			t.Fatalf("describeOfferings: %v", err)
+		}
+
 		var out []string
-		for _, o := range s.describeOfferings(f) {
+		for _, o := range matched {
 			out = append(out, o.id)
 		}
 
