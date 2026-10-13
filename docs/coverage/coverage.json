@@ -15723,10 +15723,28 @@
     "interface": "Service",
     "operations": [
       {
+        "name": "AddAssociation"
+      },
+      {
         "name": "AddTags"
       },
       {
+        "name": "AssociateTrialComponent"
+      },
+      {
+        "name": "BatchDescribeModelPackage"
+      },
+      {
+        "name": "CreateAction"
+      },
+      {
         "name": "CreateApp"
+      },
+      {
+        "name": "CreateAppImageConfig"
+      },
+      {
+        "name": "CreateArtifact"
       },
       {
         "name": "CreateAutoMLJobV2"
@@ -15739,6 +15757,9 @@
       },
       {
         "name": "CreateCompilationJob"
+      },
+      {
+        "name": "CreateContext"
       },
       {
         "name": "CreateDomain"
@@ -15759,6 +15780,12 @@
         "name": "CreateHyperParameterTuningJob"
       },
       {
+        "name": "CreateImage"
+      },
+      {
+        "name": "CreateImageVersion"
+      },
+      {
         "name": "CreateInferenceComponent"
       },
       {
@@ -15774,6 +15801,12 @@
         "name": "CreateModelPackageGroup"
       },
       {
+        "name": "CreateMonitoringJobDefinition"
+      },
+      {
+        "name": "CreateMonitoringSchedule"
+      },
+      {
         "name": "CreateNotebookInstance"
       },
       {
@@ -15784,6 +15817,9 @@
       },
       {
         "name": "CreateProcessingJob"
+      },
+      {
+        "name": "CreateProject"
       },
       {
         "name": "CreateSpace"
@@ -15798,16 +15834,40 @@
         "name": "CreateTrial"
       },
       {
+        "name": "CreateTrialComponent"
+      },
+      {
         "name": "CreateUserProfile"
       },
       {
+        "name": "CreateWorkforce"
+      },
+      {
+        "name": "CreateWorkteam"
+      },
+      {
+        "name": "DeleteAction"
+      },
+      {
         "name": "DeleteApp"
+      },
+      {
+        "name": "DeleteAppImageConfig"
+      },
+      {
+        "name": "DeleteArtifact"
+      },
+      {
+        "name": "DeleteAssociation"
       },
       {
         "name": "DeleteCluster"
       },
       {
         "name": "DeleteCodeRepository"
+      },
+      {
+        "name": "DeleteContext"
       },
       {
         "name": "DeleteDomain"
@@ -15825,6 +15885,12 @@
         "name": "DeleteFeatureGroup"
       },
       {
+        "name": "DeleteImage"
+      },
+      {
+        "name": "DeleteImageVersion"
+      },
+      {
         "name": "DeleteInferenceComponent"
       },
       {
@@ -15837,6 +15903,15 @@
         "name": "DeleteModelPackageGroup"
       },
       {
+        "name": "DeleteModelPackageGroupPolicy"
+      },
+      {
+        "name": "DeleteMonitoringJobDefinition"
+      },
+      {
+        "name": "DeleteMonitoringSchedule"
+      },
+      {
         "name": "DeleteNotebookInstance"
       },
       {
@@ -15844,6 +15919,9 @@
       },
       {
         "name": "DeletePipeline"
+      },
+      {
+        "name": "DeleteProject"
       },
       {
         "name": "DeleteRecord"
@@ -15858,10 +15936,28 @@
         "name": "DeleteTrial"
       },
       {
+        "name": "DeleteTrialComponent"
+      },
+      {
         "name": "DeleteUserProfile"
       },
       {
+        "name": "DeleteWorkforce"
+      },
+      {
+        "name": "DeleteWorkteam"
+      },
+      {
+        "name": "DescribeAction"
+      },
+      {
         "name": "DescribeApp"
+      },
+      {
+        "name": "DescribeAppImageConfig"
+      },
+      {
+        "name": "DescribeArtifact"
       },
       {
         "name": "DescribeAutoMLJobV2"
@@ -15877,6 +15973,9 @@
       },
       {
         "name": "DescribeCompilationJob"
+      },
+      {
+        "name": "DescribeContext"
       },
       {
         "name": "DescribeDomain"
@@ -15897,10 +15996,19 @@
         "name": "DescribeHyperParameterTuningJob"
       },
       {
+        "name": "DescribeImage"
+      },
+      {
+        "name": "DescribeImageVersion"
+      },
+      {
         "name": "DescribeInferenceComponent"
       },
       {
         "name": "DescribeLabelingJob"
+      },
+      {
+        "name": "DescribeLineageGroup"
       },
       {
         "name": "DescribeModel"
@@ -15910,6 +16018,12 @@
       },
       {
         "name": "DescribeModelPackageGroup"
+      },
+      {
+        "name": "DescribeMonitoringJobDefinition"
+      },
+      {
+        "name": "DescribeMonitoringSchedule"
       },
       {
         "name": "DescribeNotebookInstance"
@@ -15927,7 +16041,13 @@
         "name": "DescribeProcessingJob"
       },
       {
+        "name": "DescribeProject"
+      },
+      {
         "name": "DescribeSpace"
+      },
+      {
+        "name": "DescribeSubscribedWorkteam"
       },
       {
         "name": "DescribeTrainingJob"
@@ -15939,10 +16059,31 @@
         "name": "DescribeTrial"
       },
       {
+        "name": "DescribeTrialComponent"
+      },
+      {
         "name": "DescribeUserProfile"
       },
       {
+        "name": "DescribeWorkforce"
+      },
+      {
+        "name": "DescribeWorkteam"
+      },
+      {
+        "name": "DisassociateTrialComponent"
+      },
+      {
+        "name": "GetLineageGroupPolicy"
+      },
+      {
+        "name": "GetModelPackageGroupPolicy"
+      },
+      {
         "name": "GetRecord"
+      },
+      {
+        "name": "GetSearchSuggestions"
       },
       {
         "name": "InvokeEndpoint"
@@ -15951,7 +16092,23 @@
         "name": "InvokeEndpointAsync"
       },
       {
+        "name": "ListActions"
+      },
+      {
+        "name": "ListAliases"
+      },
+      {
+        "name": "ListAppImageConfigs"
+      },
+      {
         "name": "ListApps"
+      },
+      {
+        "name": "ListArtifacts"
+      },
+      {
+        "name": "ListAssociations",
+        "doc": "ListAssociations filters by opts.Filters keys AssociationType, SourceArn,"
       },
       {
         "name": "ListAutoMLJobs"
@@ -15967,6 +16124,9 @@
       },
       {
         "name": "ListCompilationJobs"
+      },
+      {
+        "name": "ListContexts"
       },
       {
         "name": "ListDomains"
@@ -15987,10 +16147,22 @@
         "name": "ListHyperParameterTuningJobs"
       },
       {
+        "name": "ListImageVersions"
+      },
+      {
+        "name": "ListImages"
+      },
+      {
         "name": "ListInferenceComponents"
       },
       {
         "name": "ListLabelingJobs"
+      },
+      {
+        "name": "ListLabelingJobsForWorkteam"
+      },
+      {
+        "name": "ListLineageGroups"
       },
       {
         "name": "ListModelPackageGroups"
@@ -16000,6 +16172,21 @@
       },
       {
         "name": "ListModels"
+      },
+      {
+        "name": "ListMonitoringAlertHistory"
+      },
+      {
+        "name": "ListMonitoringAlerts"
+      },
+      {
+        "name": "ListMonitoringExecutions"
+      },
+      {
+        "name": "ListMonitoringJobDefinitions"
+      },
+      {
+        "name": "ListMonitoringSchedules"
       },
       {
         "name": "ListNotebookInstanceLifecycleConfigs"
@@ -16017,7 +16204,13 @@
         "name": "ListProcessingJobs"
       },
       {
+        "name": "ListProjects"
+      },
+      {
         "name": "ListSpaces"
+      },
+      {
+        "name": "ListSubscribedWorkteams"
       },
       {
         "name": "ListTags"
@@ -16029,13 +16222,35 @@
         "name": "ListTransformJobs"
       },
       {
+        "name": "ListTrialComponents",
+        "doc": "ListTrialComponents filters by opts.Filters keys ExperimentName, TrialName"
+      },
+      {
         "name": "ListTrials"
       },
       {
         "name": "ListUserProfiles"
       },
       {
+        "name": "ListWorkforces"
+      },
+      {
+        "name": "ListWorkteams"
+      },
+      {
+        "name": "PutModelPackageGroupPolicy"
+      },
+      {
         "name": "PutRecord"
+      },
+      {
+        "name": "QueryLineage"
+      },
+      {
+        "name": "Search"
+      },
+      {
+        "name": "StartMonitoringSchedule"
       },
       {
         "name": "StartNotebookInstance"
@@ -16056,6 +16271,9 @@
         "name": "StopLabelingJob"
       },
       {
+        "name": "StopMonitoringSchedule"
+      },
+      {
         "name": "StopNotebookInstance"
       },
       {
@@ -16071,7 +16289,19 @@
         "name": "StopTransformJob"
       },
       {
+        "name": "UpdateAction"
+      },
+      {
+        "name": "UpdateAppImageConfig"
+      },
+      {
+        "name": "UpdateArtifact"
+      },
+      {
         "name": "UpdateCluster"
+      },
+      {
+        "name": "UpdateContext"
       },
       {
         "name": "UpdateEndpoint"
@@ -16080,10 +16310,40 @@
         "name": "UpdateEndpointWeightsAndCapacities"
       },
       {
+        "name": "UpdateImage"
+      },
+      {
+        "name": "UpdateImageVersion"
+      },
+      {
         "name": "UpdateModelPackage"
       },
       {
+        "name": "UpdateMonitoringAlert"
+      },
+      {
+        "name": "UpdateMonitoringSchedule"
+      },
+      {
+        "name": "UpdateNotebookInstance"
+      },
+      {
+        "name": "UpdateNotebookInstanceLifecycleConfig"
+      },
+      {
         "name": "UpdatePipeline"
+      },
+      {
+        "name": "UpdateProject"
+      },
+      {
+        "name": "UpdateTrialComponent"
+      },
+      {
+        "name": "UpdateWorkforce"
+      },
+      {
+        "name": "UpdateWorkteam"
       }
     ],
     "optionalCapabilities": [
@@ -16104,10 +16364,28 @@
         "doc": "SageMaker is the interface that SageMaker AI control-plane implementations",
         "operations": [
           {
+            "name": "AddAssociation"
+          },
+          {
             "name": "AddTags"
           },
           {
+            "name": "AssociateTrialComponent"
+          },
+          {
+            "name": "BatchDescribeModelPackage"
+          },
+          {
+            "name": "CreateAction"
+          },
+          {
             "name": "CreateApp"
+          },
+          {
+            "name": "CreateAppImageConfig"
+          },
+          {
+            "name": "CreateArtifact"
           },
           {
             "name": "CreateAutoMLJobV2"
@@ -16120,6 +16398,9 @@
           },
           {
             "name": "CreateCompilationJob"
+          },
+          {
+            "name": "CreateContext"
           },
           {
             "name": "CreateDomain"
@@ -16140,6 +16421,12 @@
             "name": "CreateHyperParameterTuningJob"
           },
           {
+            "name": "CreateImage"
+          },
+          {
+            "name": "CreateImageVersion"
+          },
+          {
             "name": "CreateInferenceComponent"
           },
           {
@@ -16155,6 +16442,12 @@
             "name": "CreateModelPackageGroup"
           },
           {
+            "name": "CreateMonitoringJobDefinition"
+          },
+          {
+            "name": "CreateMonitoringSchedule"
+          },
+          {
             "name": "CreateNotebookInstance"
           },
           {
@@ -16165,6 +16458,9 @@
           },
           {
             "name": "CreateProcessingJob"
+          },
+          {
+            "name": "CreateProject"
           },
           {
             "name": "CreateSpace"
@@ -16179,16 +16475,40 @@
             "name": "CreateTrial"
           },
           {
+            "name": "CreateTrialComponent"
+          },
+          {
             "name": "CreateUserProfile"
           },
           {
+            "name": "CreateWorkforce"
+          },
+          {
+            "name": "CreateWorkteam"
+          },
+          {
+            "name": "DeleteAction"
+          },
+          {
             "name": "DeleteApp"
+          },
+          {
+            "name": "DeleteAppImageConfig"
+          },
+          {
+            "name": "DeleteArtifact"
+          },
+          {
+            "name": "DeleteAssociation"
           },
           {
             "name": "DeleteCluster"
           },
           {
             "name": "DeleteCodeRepository"
+          },
+          {
+            "name": "DeleteContext"
           },
           {
             "name": "DeleteDomain"
@@ -16206,6 +16526,12 @@
             "name": "DeleteFeatureGroup"
           },
           {
+            "name": "DeleteImage"
+          },
+          {
+            "name": "DeleteImageVersion"
+          },
+          {
             "name": "DeleteInferenceComponent"
           },
           {
@@ -16218,6 +16544,15 @@
             "name": "DeleteModelPackageGroup"
           },
           {
+            "name": "DeleteModelPackageGroupPolicy"
+          },
+          {
+            "name": "DeleteMonitoringJobDefinition"
+          },
+          {
+            "name": "DeleteMonitoringSchedule"
+          },
+          {
             "name": "DeleteNotebookInstance"
           },
           {
@@ -16225,6 +16560,9 @@
           },
           {
             "name": "DeletePipeline"
+          },
+          {
+            "name": "DeleteProject"
           },
           {
             "name": "DeleteRecord"
@@ -16239,10 +16577,28 @@
             "name": "DeleteTrial"
           },
           {
+            "name": "DeleteTrialComponent"
+          },
+          {
             "name": "DeleteUserProfile"
           },
           {
+            "name": "DeleteWorkforce"
+          },
+          {
+            "name": "DeleteWorkteam"
+          },
+          {
+            "name": "DescribeAction"
+          },
+          {
             "name": "DescribeApp"
+          },
+          {
+            "name": "DescribeAppImageConfig"
+          },
+          {
+            "name": "DescribeArtifact"
           },
           {
             "name": "DescribeAutoMLJobV2"
@@ -16258,6 +16614,9 @@
           },
           {
             "name": "DescribeCompilationJob"
+          },
+          {
+            "name": "DescribeContext"
           },
           {
             "name": "DescribeDomain"
@@ -16278,10 +16637,19 @@
             "name": "DescribeHyperParameterTuningJob"
           },
           {
+            "name": "DescribeImage"
+          },
+          {
+            "name": "DescribeImageVersion"
+          },
+          {
             "name": "DescribeInferenceComponent"
           },
           {
             "name": "DescribeLabelingJob"
+          },
+          {
+            "name": "DescribeLineageGroup"
           },
           {
             "name": "DescribeModel"
@@ -16291,6 +16659,12 @@
           },
           {
             "name": "DescribeModelPackageGroup"
+          },
+          {
+            "name": "DescribeMonitoringJobDefinition"
+          },
+          {
+            "name": "DescribeMonitoringSchedule"
           },
           {
             "name": "DescribeNotebookInstance"
@@ -16308,7 +16682,13 @@
             "name": "DescribeProcessingJob"
           },
           {
+            "name": "DescribeProject"
+          },
+          {
             "name": "DescribeSpace"
+          },
+          {
+            "name": "DescribeSubscribedWorkteam"
           },
           {
             "name": "DescribeTrainingJob"
@@ -16320,13 +16700,50 @@
             "name": "DescribeTrial"
           },
           {
+            "name": "DescribeTrialComponent"
+          },
+          {
             "name": "DescribeUserProfile"
+          },
+          {
+            "name": "DescribeWorkforce"
+          },
+          {
+            "name": "DescribeWorkteam"
+          },
+          {
+            "name": "DisassociateTrialComponent"
+          },
+          {
+            "name": "GetLineageGroupPolicy"
+          },
+          {
+            "name": "GetModelPackageGroupPolicy"
           },
           {
             "name": "GetRecord"
           },
           {
+            "name": "GetSearchSuggestions"
+          },
+          {
+            "name": "ListActions"
+          },
+          {
+            "name": "ListAliases"
+          },
+          {
+            "name": "ListAppImageConfigs"
+          },
+          {
             "name": "ListApps"
+          },
+          {
+            "name": "ListArtifacts"
+          },
+          {
+            "name": "ListAssociations",
+            "doc": "ListAssociations filters by opts.Filters keys AssociationType, SourceArn,"
           },
           {
             "name": "ListAutoMLJobs"
@@ -16342,6 +16759,9 @@
           },
           {
             "name": "ListCompilationJobs"
+          },
+          {
+            "name": "ListContexts"
           },
           {
             "name": "ListDomains"
@@ -16362,10 +16782,22 @@
             "name": "ListHyperParameterTuningJobs"
           },
           {
+            "name": "ListImageVersions"
+          },
+          {
+            "name": "ListImages"
+          },
+          {
             "name": "ListInferenceComponents"
           },
           {
             "name": "ListLabelingJobs"
+          },
+          {
+            "name": "ListLabelingJobsForWorkteam"
+          },
+          {
+            "name": "ListLineageGroups"
           },
           {
             "name": "ListModelPackageGroups"
@@ -16375,6 +16807,21 @@
           },
           {
             "name": "ListModels"
+          },
+          {
+            "name": "ListMonitoringAlertHistory"
+          },
+          {
+            "name": "ListMonitoringAlerts"
+          },
+          {
+            "name": "ListMonitoringExecutions"
+          },
+          {
+            "name": "ListMonitoringJobDefinitions"
+          },
+          {
+            "name": "ListMonitoringSchedules"
           },
           {
             "name": "ListNotebookInstanceLifecycleConfigs"
@@ -16392,7 +16839,13 @@
             "name": "ListProcessingJobs"
           },
           {
+            "name": "ListProjects"
+          },
+          {
             "name": "ListSpaces"
+          },
+          {
+            "name": "ListSubscribedWorkteams"
           },
           {
             "name": "ListTags"
@@ -16404,13 +16857,35 @@
             "name": "ListTransformJobs"
           },
           {
+            "name": "ListTrialComponents",
+            "doc": "ListTrialComponents filters by opts.Filters keys ExperimentName, TrialName"
+          },
+          {
             "name": "ListTrials"
           },
           {
             "name": "ListUserProfiles"
           },
           {
+            "name": "ListWorkforces"
+          },
+          {
+            "name": "ListWorkteams"
+          },
+          {
+            "name": "PutModelPackageGroupPolicy"
+          },
+          {
             "name": "PutRecord"
+          },
+          {
+            "name": "QueryLineage"
+          },
+          {
+            "name": "Search"
+          },
+          {
+            "name": "StartMonitoringSchedule"
           },
           {
             "name": "StartNotebookInstance"
@@ -16431,6 +16906,9 @@
             "name": "StopLabelingJob"
           },
           {
+            "name": "StopMonitoringSchedule"
+          },
+          {
             "name": "StopNotebookInstance"
           },
           {
@@ -16446,7 +16924,19 @@
             "name": "StopTransformJob"
           },
           {
+            "name": "UpdateAction"
+          },
+          {
+            "name": "UpdateAppImageConfig"
+          },
+          {
+            "name": "UpdateArtifact"
+          },
+          {
             "name": "UpdateCluster"
+          },
+          {
+            "name": "UpdateContext"
           },
           {
             "name": "UpdateEndpoint"
@@ -16455,10 +16945,40 @@
             "name": "UpdateEndpointWeightsAndCapacities"
           },
           {
+            "name": "UpdateImage"
+          },
+          {
+            "name": "UpdateImageVersion"
+          },
+          {
             "name": "UpdateModelPackage"
           },
           {
+            "name": "UpdateMonitoringAlert"
+          },
+          {
+            "name": "UpdateMonitoringSchedule"
+          },
+          {
+            "name": "UpdateNotebookInstance"
+          },
+          {
+            "name": "UpdateNotebookInstanceLifecycleConfig"
+          },
+          {
             "name": "UpdatePipeline"
+          },
+          {
+            "name": "UpdateProject"
+          },
+          {
+            "name": "UpdateTrialComponent"
+          },
+          {
+            "name": "UpdateWorkforce"
+          },
+          {
+            "name": "UpdateWorkteam"
           }
         ]
       }
