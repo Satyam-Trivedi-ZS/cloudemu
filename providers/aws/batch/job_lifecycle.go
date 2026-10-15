@@ -184,12 +184,14 @@ func splitChildID(id string) (parent string, idx int, ok bool) {
 		return "", 0, false
 	}
 
-	n, err := strconv.Atoi(id[i+1:])
+	// Parse with a 32-bit bound: the index ends up in the int32
+	// ArrayProperties.Index field.
+	n, err := strconv.ParseInt(id[i+1:], 10, 32)
 	if err != nil || n < 0 {
 		return "", 0, false
 	}
 
-	return id[:i], n, true
+	return id[:i], int(n), true
 }
 
 // lookup resolves a job ID to its record and, for an array child, its index
