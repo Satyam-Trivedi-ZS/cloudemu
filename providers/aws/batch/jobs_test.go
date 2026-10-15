@@ -395,6 +395,13 @@ func TestArrayJobChildren(t *testing.T) {
 		t.Fatalf("child index missing: %+v", child)
 	}
 
+	// An index past int32 must not wrap around to a real child.
+	for _, bad := range []string{":4294967296", ":2147483648", ":-1"} {
+		if jobs, err := m.DescribeJobs(ctx, []string{parent.JobID + bad}); err != nil || len(jobs) != 0 {
+			t.Fatalf("DescribeJobs(%s) = %+v, %v; want no job", bad, jobs, err)
+		}
+	}
+
 	all := driver.JobStatusPending
 	kids, err := listJobs(m, driver.ListJobsInput{ArrayJobID: parent.JobID, JobStatus: all})
 	if err != nil || len(kids) != 2 {
