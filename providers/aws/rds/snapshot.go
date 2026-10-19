@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/stackshy/cloudemu/v2/internal/snapshot"
+	rdsdriver "github.com/stackshy/cloudemu/v2/services/relationaldb/driver"
 )
 
 var _ snapshot.Snapshottable = (*Mock)(nil)
@@ -14,7 +15,8 @@ var _ snapshot.Snapshottable = (*Mock)(nil)
 // store holds a fully-exported rdsdriver type, so each round-trips through the
 // generic memstore helper keyed by its resource id. The mu-guarded maps carry
 // state that lives beside the stores: clusterCreds (unexported value type, so
-// promoted), groupTags, and rootPasswords. The in-flight settle overlays
+// promoted), groupTags, rootPasswords, and the DescribeEvents event log. The
+// queued SNS deliveries (outbox) are transient and not serialized. The in-flight settle overlays
 // (instSettle/snapSettle) and the wired deps (opts, subnetResolver, monitoring)
 // are intentionally not serialized. A restored record reports its stored state.
 type rdsSnapshot struct {
@@ -34,6 +36,7 @@ type rdsSnapshot struct {
 	ClusterCreds  map[string]clusterCredSnapshot `json:"clusterCreds,omitempty"`
 	GroupTags     map[string]map[string]string   `json:"groupTags,omitempty"`
 	RootPasswords map[string]string              `json:"rootPasswords,omitempty"`
+	Events        []rdsdriver.Event              `json:"events,omitempty"`
 }
 
 // clusterCredSnapshot is the exported form of clusterCred (whose fields are
@@ -103,6 +106,7 @@ func (m *Mock) snapshotScalarState(snap *rdsSnapshot) {
 
 	snap.GroupTags = m.groupTags
 	snap.RootPasswords = m.rootPasswords
+	snap.Events = m.events
 }
 
 // Restore rebuilds the mock's state under the original identities: every
@@ -176,5 +180,9 @@ func (m *Mock) restoreScalarState(snap *rdsSnapshot) {
 
 	if snap.RootPasswords != nil {
 		m.rootPasswords = snap.RootPasswords
+	}
+
+	if snap.Events != nil {
+		m.events = snap.Events
 	}
 }

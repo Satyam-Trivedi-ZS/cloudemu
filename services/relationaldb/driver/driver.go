@@ -1732,9 +1732,28 @@ type ModifyEventSubscriptionInput struct {
 type Event struct {
 	SourceIdentifier string
 	SourceType       string
-	Message          string
+	// SourceARN is the ARN of the resource that emitted the event.
+	SourceARN       string
+	Message         string
+	EventCategories []string
+	Date            time.Time
+	// EventID is the RDS event identifier (e.g. "RDS-EVENT-0005"). It is not
+	// part of the DescribeEvents wire shape; it is carried in event
+	// notifications delivered to an SNS topic.
+	EventID string
+}
+
+// DescribeEventsInput filters DescribeEvents. Zero values mean "no filter",
+// except the time window: with neither StartTime nor Duration set, the window
+// is the past 60 minutes ending at EndTime (default now).
+type DescribeEventsInput struct {
+	SourceType       string
+	SourceIdentifier string
 	EventCategories  []string
-	Date             time.Time
+	StartTime        time.Time
+	EndTime          time.Time
+	// Duration is the window length in minutes, used when StartTime is unset.
+	Duration int
 }
 
 // EventCategoryGroup lists the event categories available for a source type.
@@ -1750,7 +1769,7 @@ type EventSubscriptions interface {
 	DescribeEventSubscriptions(ctx context.Context, names []string) ([]EventSubscription, error)
 	ModifyEventSubscription(ctx context.Context, name string, input ModifyEventSubscriptionInput) (*EventSubscription, error)
 	DeleteEventSubscription(ctx context.Context, name string) (*EventSubscription, error)
-	DescribeEvents(ctx context.Context, sourceType, sourceIdentifier string, categories []string) ([]Event, error)
+	DescribeEvents(ctx context.Context, input DescribeEventsInput) ([]Event, error)
 	DescribeEventCategories(ctx context.Context, sourceType string) ([]EventCategoryGroup, error)
 }
 

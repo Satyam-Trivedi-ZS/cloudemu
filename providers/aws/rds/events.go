@@ -161,12 +161,6 @@ func (m *Mock) DeleteEventSubscription(_ context.Context, name string) (*rdsdriv
 	return &out, nil
 }
 
-// DescribeEvents returns an empty list: the emulator does not retain an event
-// timeline, so there are truthfully no events to report for any window.
-func (*Mock) DescribeEvents(_ context.Context, _, _ string, _ []string) ([]rdsdriver.Event, error) {
-	return []rdsdriver.Event{}, nil
-}
-
 func (*Mock) DescribeEventCategories(_ context.Context, sourceType string) ([]rdsdriver.EventCategoryGroup, error) {
 	if sourceType != "" {
 		cats, ok := eventCategoryCatalog[sourceType]

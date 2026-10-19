@@ -4,7 +4,10 @@ import (
 	"encoding/xml"
 	"net/http"
 	"net/url"
+	"strconv"
+	"time"
 
+	"github.com/stackshy/cloudemu/v2/internal/pagination"
 	"github.com/stackshy/cloudemu/v2/server/wire/awsquery"
 	rdsdriver "github.com/stackshy/cloudemu/v2/services/relationaldb/driver"
 )
@@ -27,6 +30,7 @@ type eventSubscriptionXML struct {
 type eventXML struct {
 	SourceIdentifier string   `xml:"SourceIdentifier,omitempty"`
 	SourceType       string   `xml:"SourceType,omitempty"`
+	SourceArn        string   `xml:"SourceArn,omitempty"`
 	Message          string   `xml:"Message,omitempty"`
 	EventCategories  []string `xml:"EventCategories>EventCategory,omitempty"`
 	Date             string   `xml:"Date,omitempty"`
@@ -81,6 +85,7 @@ type describeEventsResponse struct {
 }
 
 type eventsList struct {
+	Marker string     `xml:"Marker,omitempty"`
 	Events []eventXML `xml:"Events>Event"`
 }
 
@@ -231,19 +236,48 @@ func (h *Handler) describeEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events, err := store.DescribeEvents(r.Context(),
-		r.Form.Get("SourceType"), r.Form.Get("SourceIdentifier"),
-		awsquery.ListStrings(r.Form, "EventCategories.EventCategory"))
+	maxRecords, ok := describeEventsMaxRecords(r.Form.Get("MaxRecords"))
+	if !ok {
+		awsquery.WriteXMLError(w, http.StatusBadRequest, "InvalidParameterValue",
+			"MaxRecords must be between 20 and 100")
+
+		return
+	}
+
+	sourceType, sourceID := r.Form.Get("SourceType"), r.Form.Get("SourceIdentifier")
+	if code, msg := validateEventSource(sourceType, sourceID); code != "" {
+		awsquery.WriteXMLError(w, http.StatusBadRequest, code, msg)
+		return
+	}
+
+	events, err := store.DescribeEvents(r.Context(), rdsdriver.DescribeEventsInput{
+		SourceType:       sourceType,
+		SourceIdentifier: sourceID,
+		EventCategories:  awsquery.ListStrings(r.Form, "EventCategories.EventCategory"),
+		StartTime:        parseEventTime(r.Form.Get("StartTime")),
+		EndTime:          parseEventTime(r.Form.Get("EndTime")),
+		Duration:         formInt(r.Form.Get("Duration")),
+	})
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 
-	out := make([]eventXML, 0, len(events))
-	for _, e := range events {
+	// Events are already oldest-first; page them in that order (no re-sort).
+	page, err := pagination.Paginate(events, r.Form.Get("Marker"), maxRecords)
+	if err != nil {
+		awsquery.WriteXMLError(w, http.StatusBadRequest, "InvalidParameterValue", "invalid Marker")
+		return
+	}
+
+	out := make([]eventXML, 0, len(page.Items))
+
+	for i := range page.Items {
+		e := &page.Items[i]
 		out = append(out, eventXML{
 			SourceIdentifier: e.SourceIdentifier,
 			SourceType:       e.SourceType,
+			SourceArn:        e.SourceARN,
 			Message:          e.Message,
 			EventCategories:  e.EventCategories,
 			Date:             e.Date.UTC().Format("2006-01-02T15:04:05.000Z"),
@@ -252,7 +286,7 @@ func (h *Handler) describeEvents(w http.ResponseWriter, r *http.Request) {
 
 	awsquery.WriteXMLResponse(w, describeEventsResponse{
 		Xmlns:    Namespace,
-		Result:   eventsList{Events: out},
+		Result:   eventsList{Marker: page.NextPageToken, Events: out},
 		Metadata: responseMetadata{RequestID: awsquery.RequestID},
 	})
 }
@@ -280,6 +314,81 @@ func (h *Handler) describeEventCategories(w http.ResponseWriter, r *http.Request
 		Result:   eventCategoriesMapList{EventCategoriesMapList: out},
 		Metadata: responseMetadata{RequestID: awsquery.RequestID},
 	})
+}
+
+// eventSourceTypes are DescribeEvents' valid SourceType values (DescribeEvents
+// API reference, SourceType "Valid Values").
+//
+//nolint:gochecknoglobals // static lookup table
+var eventSourceTypes = map[string]struct{}{
+	"db-instance": {}, "db-parameter-group": {}, "db-security-group": {}, "db-snapshot": {},
+	"db-cluster": {}, "db-cluster-snapshot": {}, "custom-engine-version": {}, "db-proxy": {},
+	"blue-green-deployment": {}, "db-shard-group": {}, "zero-etl": {},
+}
+
+// validateEventSource checks DescribeEvents' SourceType / SourceIdentifier: the
+// type must be one of the documented values, and "If SourceIdentifier is
+// supplied, SourceType must also be provided" (DescribeEvents API reference).
+// It returns the RDS error code and message, or "" when the pair is valid.
+func validateEventSource(sourceType, sourceID string) (code, msg string) {
+	if sourceType != "" {
+		if _, ok := eventSourceTypes[sourceType]; !ok {
+			return "InvalidParameterValue", "Invalid source type: " + sourceType
+		}
+	}
+
+	if sourceID != "" && sourceType == "" {
+		return "InvalidParameterCombination", "SourceType must be provided when SourceIdentifier is specified"
+	}
+
+	return "", ""
+}
+
+// DescribeEvents MaxRecords bounds: "Default: 100. Constraints: Minimum 20,
+// maximum 100." (DescribeEvents API reference).
+const (
+	minEventRecords     = 20
+	maxEventRecords     = 100
+	defaultEventRecords = 100
+)
+
+// describeEventsMaxRecords resolves DescribeEvents' MaxRecords: absent means
+// the default 100; a non-integer or a value outside [20, 100] is invalid.
+func describeEventsMaxRecords(raw string) (int, bool) {
+	if raw == "" {
+		return defaultEventRecords, true
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < minEventRecords || n > maxEventRecords {
+		return 0, false
+	}
+
+	return n, true
+}
+
+// eventTimeLayouts are the ISO 8601 forms DescribeEvents StartTime/EndTime
+// arrive in: the SDKs send full RFC 3339 timestamps, while the API reference
+// example uses the minute-precision form "2009-07-08T18:00Z".
+//
+//nolint:gochecknoglobals // static lookup table
+var eventTimeLayouts = []string{time.RFC3339Nano, "2006-01-02T15:04Z07:00", "2006-01-02T15:04", time.DateOnly}
+
+// parseEventTime parses an optional DescribeEvents timestamp. An absent or
+// unparseable value yields the zero time, meaning "no bound", mirroring
+// parseRestoreTime.
+func parseEventTime(v string) time.Time {
+	if v == "" {
+		return time.Time{}
+	}
+
+	for _, layout := range eventTimeLayouts {
+		if t, err := time.Parse(layout, v); err == nil {
+			return t
+		}
+	}
+
+	return time.Time{}
 }
 
 // enabledDefaultTrue reads the Enabled flag, defaulting to true when the field
