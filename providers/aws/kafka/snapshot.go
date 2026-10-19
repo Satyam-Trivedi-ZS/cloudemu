@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/stackshy/cloudemu/v2/internal/snapshot"
 	"github.com/stackshy/cloudemu/v2/services/kafka/driver"
@@ -19,13 +20,20 @@ var _ snapshot.Snapshottable = (*Mock)(nil)
 // index of *clusterData pointers shared with the clusters store, rebuilt on
 // restore from each cluster's operations slice so the shared identity (a
 // DescribeClusterOperation resolves to the same cluster object) is preserved.
-// The per-record mutexes, createMu, and the wired opts are not serialized.
+// The AsyncSettle lifecycle windows (a cluster's CREATING/DELETING deadline, a
+// VPC connection's CREATING deadline) and the metric sample time are
+// serialized, so a restored resource keeps its transient state until its window
+// ends and Tick keeps its publishing cadence. The per-record mutexes,
+// createMu/reapMu, the wired opts and the monitoring backend are not.
 type kafkaSnapshot struct {
 	Clusters     map[string]*clusterSnapshot     `json:"clusters,omitempty"`
 	ClusterNames json.RawMessage                 `json:"clusterNames,omitempty"`
 	Configs      map[string]driver.Configuration `json:"configs,omitempty"`
 	VPCConns     map[string]driver.VpcConnection `json:"vpcConns,omitempty"`
-	Replicators  map[string]*replicatorSnapshot  `json:"replicators,omitempty"`
+	// VPCConnReadyAt holds the CREATING deadline of each VPC connection still
+	// inside its window (kept beside VPCConns so older snapshots still load).
+	VPCConnReadyAt map[string]time.Time           `json:"vpcConnReadyAt,omitempty"`
+	Replicators    map[string]*replicatorSnapshot `json:"replicators,omitempty"`
 }
 
 // clusterSnapshot mirrors clusterData (all fields unexported).
@@ -36,6 +44,10 @@ type clusterSnapshot struct {
 	ScramSecrets  []string                  `json:"scramSecrets,omitempty"`
 	Policy        string                    `json:"policy,omitempty"`
 	PolicyVersion string                    `json:"policyVersion,omitempty"`
+	// Lifecycle windows (AsyncSettle) and the last metric sample time.
+	ReadyAt         time.Time `json:"readyAt,omitzero"`
+	DeleteAt        time.Time `json:"deleteAt,omitzero"`
+	MetricsSampleAt time.Time `json:"metricsSampleAt,omitzero"`
 }
 
 // replicatorSnapshot mirrors replicatorData.
@@ -57,6 +69,7 @@ func (m *Mock) Snapshot(_ context.Context, _ bool) (json.RawMessage, error) {
 			snap.Clusters[arn] = &clusterSnapshot{
 				Cluster: cd.cluster, Operations: cd.operations, Topics: cd.topics,
 				ScramSecrets: cd.scramSecrets, Policy: cd.policy, PolicyVersion: cd.policyVersion,
+				ReadyAt: cd.readyAt, DeleteAt: cd.deleteAt, MetricsSampleAt: cd.metricsSampleAt,
 			}
 			cd.mu.RUnlock()
 		}
@@ -85,6 +98,14 @@ func (m *Mock) Snapshot(_ context.Context, _ bool) (json.RawMessage, error) {
 		for arn, vd := range m.vpcConns.All() {
 			vd.mu.RLock()
 			snap.VPCConns[arn] = vd.vpc
+
+			if !vd.readyAt.IsZero() {
+				if snap.VPCConnReadyAt == nil {
+					snap.VPCConnReadyAt = map[string]time.Time{}
+				}
+
+				snap.VPCConnReadyAt[arn] = vd.readyAt
+			}
 			vd.mu.RUnlock()
 		}
 	}
@@ -112,9 +133,16 @@ func (m *Mock) Restore(_ context.Context, data json.RawMessage) error {
 	}
 
 	for arn, cs := range snap.Clusters {
+		// A snapshot from before the provider completed encryptionInfo at create
+		// lacks it; backfill MSK's default so the restored cluster reports it.
+		if cs.Cluster.ClusterType == driver.ClusterTypeProvisioned {
+			cs.Cluster.RawOptions = m.withDefaultEncryption(cs.Cluster.RawOptions)
+		}
+
 		cd := &clusterData{
 			cluster: cs.Cluster, operations: cs.Operations, topics: cs.Topics,
 			scramSecrets: cs.ScramSecrets, policy: cs.Policy, policyVersion: cs.PolicyVersion,
+			readyAt: cs.ReadyAt, deleteAt: cs.DeleteAt, metricsSampleAt: cs.MetricsSampleAt,
 		}
 
 		m.clusters.Set(arn, cd)
@@ -137,7 +165,7 @@ func (m *Mock) Restore(_ context.Context, data json.RawMessage) error {
 	}
 
 	for arn, vpc := range snap.VPCConns {
-		m.vpcConns.Set(arn, &vpcConnData{vpc: vpc})
+		m.vpcConns.Set(arn, &vpcConnData{vpc: vpc, readyAt: snap.VPCConnReadyAt[arn]})
 	}
 
 	for arn, rs := range snap.Replicators {

@@ -500,6 +500,9 @@ func newProvider(o *config.Options, shared *GlobalServices) *Provider {
 	// matching real EKS (which auto-creates the cluster SG and infers the VPC).
 	p.EKS.SetSubnetResolver(p.VPC)
 	p.SageMaker.SetMonitoring(p.CloudWatch)
+	// MSK publishes DEFAULT-level AWS/Kafka metrics for each ACTIVE provisioned
+	// cluster once a minute, from the serve scheduler (see Tickables).
+	p.Kafka.SetMonitoring(p.CloudWatch)
 	// CloudWatch alarm -> SNS: an alarm state transition fires its configured
 	// SNS-topic actions, fanning a notification out to the topic's subscribers.
 	p.CloudWatch.SetSNSPublisher(p.SNS)
@@ -638,9 +641,10 @@ func awsDrivers(p *Provider) *resourcediscovery.Drivers {
 // background ticker calls each one on its interval. New time-driven services
 // register here.
 func (p *Provider) Tickables() []config.Tickable {
-	// SQS and EFS run before CloudWatch so the alarms evaluated in the same
-	// tick see the queue gauges and AWS/EFS metrics they just published.
-	return []config.Tickable{p.SQS, p.EFS, p.CloudWatch, p.SSM, p.CloudFormation, p.Batch}
+	// SQS, EFS and Kafka run before CloudWatch so the alarms evaluated in the
+	// same tick see the queue gauges and AWS/EFS and AWS/Kafka metrics they just
+	// published.
+	return []config.Tickable{p.SQS, p.EFS, p.Kafka, p.CloudWatch, p.SSM, p.CloudFormation, p.Batch}
 }
 
 // Close tears down any real engines wired into the provider via
