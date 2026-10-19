@@ -2,6 +2,8 @@ package rds
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"strings"
 
 	cerrors "github.com/stackshy/cloudemu/v2/errors"
@@ -120,15 +122,29 @@ func (m *Mock) CreateDBParameterGroup(ctx context.Context, cfg rdsdriver.Paramet
 	return &out, nil
 }
 
-func (m *Mock) DescribeDBParameterGroups(_ context.Context, names []string) ([]rdsdriver.ParameterGroup, error) {
+// DescribeDBParameterGroups lists the stored groups plus the always-present
+// "default.<family>" groups RDS associates with instances created without one.
+// A default group is synthesized (never stored, so it cannot be modified or
+// deleted) when an instance references it, or when it is named explicitly,
+// mirroring DescribeDBParameters.
+func (m *Mock) DescribeDBParameterGroups(ctx context.Context, names []string) ([]rdsdriver.ParameterGroup, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	region := regionctx.RegionOr(ctx, m.opts.Region)
 
 	if len(names) == 0 {
 		all := m.paramGroups.SortedValues()
 		for i := range all {
 			all[i].Parameters = copyParams(all[i].Parameters)
 		}
+
+		for _, name := range m.referencedDefaultParamGroups() {
+			family, _ := defaultGroupFamily(name)
+			all = append(all, m.defaultParameterGroup(region, name, family))
+		}
+
+		slices.SortFunc(all, func(a, b rdsdriver.ParameterGroup) int { return strings.Compare(a.Name, b.Name) })
 
 		return all, nil
 	}
@@ -138,7 +154,12 @@ func (m *Mock) DescribeDBParameterGroups(_ context.Context, names []string) ([]r
 	for _, name := range names {
 		pg, ok := m.paramGroups.Get(name)
 		if !ok {
-			return nil, errParameterGroupNotFound(name)
+			family, isDefault := defaultGroupFamily(name)
+			if !isDefault {
+				return nil, errParameterGroupNotFound(name)
+			}
+
+			pg = m.defaultParameterGroup(region, name, family)
 		}
 
 		pg.Parameters = copyParams(pg.Parameters)
@@ -149,6 +170,8 @@ func (m *Mock) DescribeDBParameterGroups(_ context.Context, names []string) ([]r
 }
 
 func (m *Mock) ModifyDBParameterGroup(_ context.Context, name string, params []rdsdriver.Parameter) (*rdsdriver.ParameterGroup, error) {
+	defer m.flushEventNotifications() // runs after the unlock below
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -159,6 +182,12 @@ func (m *Mock) ModifyDBParameterGroup(_ context.Context, name string, params []r
 
 	pg.Parameters = withParams(pg.Parameters, params)
 	m.paramGroups.Set(name, pg)
+
+	// Real RDS raises one RDS-EVENT-0037 per updated parameter.
+	for _, prm := range params {
+		m.recordEventLocked(eventSource{sourceDBParameterGroup, name, pg.ARN}, evParameterUpdated,
+			prm.Name, prm.Value, applyMethodOrDefault(prm.ApplyMethod))
+	}
 
 	out := pg
 
@@ -315,15 +344,29 @@ func (m *Mock) CreateDBClusterParameterGroup(
 	return &out, nil
 }
 
-func (m *Mock) DescribeDBClusterParameterGroups(_ context.Context, names []string) ([]rdsdriver.ClusterParameterGroup, error) {
+// DescribeDBClusterParameterGroups mirrors DescribeDBParameterGroups for
+// cluster parameter groups, synthesizing the "default.<family>" groups that
+// clusters reference or that are named explicitly.
+func (m *Mock) DescribeDBClusterParameterGroups(
+	ctx context.Context, names []string,
+) ([]rdsdriver.ClusterParameterGroup, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	region := regionctx.RegionOr(ctx, m.opts.Region)
 
 	if len(names) == 0 {
 		all := m.clusterParamGroups.SortedValues()
 		for i := range all {
 			all[i].Parameters = copyParams(all[i].Parameters)
 		}
+
+		for _, name := range m.referencedDefaultClusterParamGroups() {
+			family, _ := defaultGroupFamily(name)
+			all = append(all, m.defaultClusterParameterGroup(region, name, family))
+		}
+
+		slices.SortFunc(all, func(a, b rdsdriver.ClusterParameterGroup) int { return strings.Compare(a.Name, b.Name) })
 
 		return all, nil
 	}
@@ -333,7 +376,12 @@ func (m *Mock) DescribeDBClusterParameterGroups(_ context.Context, names []strin
 	for _, name := range names {
 		pg, ok := m.clusterParamGroups.Get(name)
 		if !ok {
-			return nil, errClusterParameterGroupNotFound(name)
+			family, isDefault := defaultGroupFamily(name)
+			if !isDefault {
+				return nil, errClusterParameterGroupNotFound(name)
+			}
+
+			pg = m.defaultClusterParameterGroup(region, name, family)
 		}
 
 		pg.Parameters = copyParams(pg.Parameters)
@@ -461,4 +509,62 @@ func (m *Mock) CopyDBClusterParameterGroup(
 	out := pg
 
 	return &out, nil
+}
+
+// defaultParameterGroup synthesizes the always-present "default.<family>" DB
+// parameter group, described as RDS describes it ("Default parameter group for
+// <family>").
+func (m *Mock) defaultParameterGroup(region, name, family string) rdsdriver.ParameterGroup {
+	return rdsdriver.ParameterGroup{
+		Name:        name,
+		Family:      family,
+		Description: "Default parameter group for " + family,
+		ARN:         parameterGroupARN(region, m.opts.AccountID, name),
+		Parameters:  map[string]rdsdriver.Parameter{},
+	}
+}
+
+// defaultClusterParameterGroup synthesizes the always-present
+// "default.<family>" DB cluster parameter group.
+func (m *Mock) defaultClusterParameterGroup(region, name, family string) rdsdriver.ClusterParameterGroup {
+	return rdsdriver.ClusterParameterGroup{
+		Name:        name,
+		Family:      family,
+		Description: "Default cluster parameter group for " + family,
+		ARN:         clusterParameterGroupARN(region, m.opts.AccountID, name),
+		Parameters:  map[string]rdsdriver.Parameter{},
+	}
+}
+
+// referencedDefaultParamGroups returns, sorted and de-duplicated, the
+// "default.<family>" DB parameter groups referenced by instances that are not
+// stored as explicit groups. The caller holds m.mu.
+func (m *Mock) referencedDefaultParamGroups() []string {
+	seen := map[string]struct{}{}
+
+	instances := m.instances.All()
+	for id := range instances {
+		name := instances[id].DBParameterGroupName
+		if _, isDefault := defaultGroupFamily(name); isDefault && !m.paramGroups.Has(name) {
+			seen[name] = struct{}{}
+		}
+	}
+
+	return slices.Sorted(maps.Keys(seen))
+}
+
+// referencedDefaultClusterParamGroups is referencedDefaultParamGroups for the
+// cluster parameter groups clusters reference. The caller holds m.mu.
+func (m *Mock) referencedDefaultClusterParamGroups() []string {
+	seen := map[string]struct{}{}
+
+	clusters := m.clusters.All()
+	for id := range clusters {
+		name := clusters[id].DBClusterParameterGroupName
+		if _, isDefault := defaultGroupFamily(name); isDefault && !m.clusterParamGroups.Has(name) {
+			seen[name] = struct{}{}
+		}
+	}
+
+	return slices.Sorted(maps.Keys(seen))
 }
