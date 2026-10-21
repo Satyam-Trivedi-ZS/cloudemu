@@ -53,7 +53,7 @@ func TestUnstructuredPatterns(t *testing.T) {
 		{`" "`, events},
 		{"", events},
 		{"%AUTHORIZED%", []string{err401, success}},
-		{"%^\\[ERROR 4%", []string{err400, err401, err419, err420}},
+		{"%^\\[ERROR\\s4%", []string{err400, err401, err419, err420}},
 		{"%BAD|INVALID%", []string{err400, err420}},
 		{"error", nil},
 	}
@@ -145,13 +145,27 @@ func TestInvalidPatterns(t *testing.T) {
 		`%unterminated`,
 		`"unterminated`,
 		`error:{boom}`,
-		`[ip, user]`,
+		`[ip, user`,
+		`[a, b=%x%, c=%y%, d=%z%]`,
+		`[a, b=1 || c=2]`,
+		`[a, b>abc]`,
+		`[a-b]`,
 		strings.Repeat("a", maxPatternLength+1),
 	} {
 		_, err := Parse(pattern)
 		if err == nil || !errors.IsInvalidArgument(err) {
 			t.Errorf("Parse(%.40q) = %v, want InvalidArgument", pattern, err)
 		}
+	}
+}
+
+// TestRegexAllowsLiteralSpace follows the syntax page's own example, which
+// has a space inside %...%.
+func TestRegexAllowsLiteralSpace(t *testing.T) {
+	p := mustParse(t, `%^starting|^initializing|^shutting down%`)
+
+	if !p.Match("shutting down") || !p.Match("starting up") || p.Match("skipping initializing") {
+		t.Fatal("regex with a literal space did not match like the documented example")
 	}
 }
 

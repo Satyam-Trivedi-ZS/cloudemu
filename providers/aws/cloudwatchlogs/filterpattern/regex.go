@@ -7,7 +7,9 @@ import (
 )
 
 // regexAllowedSymbols are the non-alphanumeric characters a %regex% may use:
-// the documented symbol set, the operators, the escape character, and space.
+// the documented symbol set, the operators, the escape character, and space
+// (the syntax page's own example %^starting|^initializing|^shutting down%
+// contains one).
 const regexAllowedSymbols = ":_#=@/;,-^$?[]{}|\\*+. "
 
 // compileRegex validates a %...% body against the CloudWatch Logs regex
