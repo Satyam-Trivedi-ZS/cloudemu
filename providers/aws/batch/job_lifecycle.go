@@ -105,6 +105,11 @@ func cloneJob(j driver.Job) driver.Job {
 		j.ArrayProperties = &ap
 	}
 
+	if j.NodeDetails != nil {
+		nd := *j.NodeDetails
+		j.NodeDetails = &nd
+	}
+
 	j.Parameters = copyTags(j.Parameters)
 	j.Container = copyRaw(j.Container)
 	j.NodeProperties = copyRaw(j.NodeProperties)

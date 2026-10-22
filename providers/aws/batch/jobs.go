@@ -474,8 +474,9 @@ func mergeKeyed(base, over json.RawMessage, key string) json.RawMessage {
 	return out
 }
 
-// DescribeJobs returns the requested jobs (top-level or array-child IDs) in
-// request order, each observed now. Unknown IDs are omitted.
+// DescribeJobs returns the requested jobs (top-level, array-child "<id>:<i>" or
+// multi-node "<id>#<i>" IDs) in request order, each observed now. Unknown IDs
+// are omitted.
 func (m *Mock) DescribeJobs(ctx context.Context, jobIDs []string) ([]driver.Job, error) {
 	if len(jobIDs) == 0 {
 		return nil, cerrors.New(cerrors.InvalidArgument, "jobs is required")
@@ -491,12 +492,15 @@ func (m *Mock) DescribeJobs(ctx context.Context, jobIDs []string) ([]driver.Job,
 	out := make([]driver.Job, 0, len(jobIDs))
 
 	for _, id := range jobIDs {
-		rec, idx, ok := m.lookup(id)
-		if !ok {
+		if rec, idx, ok := m.lookup(id); ok {
+			out = append(out, o.render(&rec, idx))
+
 			continue
 		}
 
-		out = append(out, o.render(&rec, idx))
+		if rec, idx, layout, ok := m.lookupNode(id); ok {
+			out = append(out, o.renderNode(&rec, &layout, idx))
+		}
 	}
 
 	return out, nil
@@ -509,14 +513,15 @@ const (
 	listJobsFilterPage = 100
 )
 
-// ListJobs lists the jobs of a queue (top-level jobs and array parents) or the
-// children of an array job. Queue listings are newest first, as the ListJobs
-// reference describes; children are listed by index. Exactly one of jobQueue,
+// ListJobs lists the jobs of a queue (top-level jobs and array parents), the
+// children of an array job or the nodes of a multi-node parallel job. Queue
+// listings are newest first, as the ListJobs reference describes; children and
+// nodes are listed by index. Exactly one of jobQueue,
 // arrayJobId and multiNodeJobId must be given. Without a filter only jobs in
 // jobStatus (default RUNNING) are returned.
 //
 // The page token is a cursor on the listing order (submission sequence, or
-// child index), not an offset, so jobs submitted or changing status between
+// child or node index), not an offset, so jobs submitted or changing status between
 // pages never make a page skip or repeat an entry.
 //
 //nolint:gocritic // in is the driver ListJobsInput, taken by value to match the interface
@@ -544,8 +549,7 @@ func (m *Mock) ListJobs(ctx context.Context, in driver.ListJobsInput) (*driver.L
 
 	switch {
 	case in.MultiNodeJobID != "":
-		// Multi-node parallel jobs are not modeled node by node.
-		return &driver.ListJobsOutput{Jobs: []driver.Job{}}, nil
+		return l.nodes(m), nil
 	case in.ArrayJobID != "":
 		return l.children(m), nil
 	default:

@@ -125,6 +125,21 @@ type arrayPropertiesWire struct {
 	StatusSummary map[string]int32 `json:"statusSummary,omitempty"`
 }
 
+// nodeDetailsWire is JobDetail.nodeDetails, set on a node of a multi-node
+// parallel job.
+type nodeDetailsWire struct {
+	NodeIndex  int32 `json:"nodeIndex"`
+	IsMainNode bool  `json:"isMainNode"`
+}
+
+// nodePropertiesSummaryWire is JobSummary.nodeProperties for a node of a
+// multi-node parallel job.
+type nodePropertiesSummaryWire struct {
+	IsMainNode bool  `json:"isMainNode"`
+	NumNodes   int32 `json:"numNodes"`
+	NodeIndex  int32 `json:"nodeIndex"`
+}
+
 type jobDetail struct {
 	JobArn               string               `json:"jobArn"`
 	JobName              string               `json:"jobName"`
@@ -140,6 +155,7 @@ type jobDetail struct {
 	JobDefinition        string               `json:"jobDefinition"`
 	Parameters           map[string]string    `json:"parameters"`
 	Container            json.RawMessage      `json:"container,omitempty"`
+	NodeDetails          *nodeDetailsWire     `json:"nodeDetails,omitempty"`
 	NodeProperties       json.RawMessage      `json:"nodeProperties,omitempty"`
 	EcsProperties        json.RawMessage      `json:"ecsProperties,omitempty"`
 	EksProperties        json.RawMessage      `json:"eksProperties,omitempty"`
@@ -179,20 +195,21 @@ type containerSummary struct {
 }
 
 type jobSummary struct {
-	JobArn          string               `json:"jobArn"`
-	JobID           string               `json:"jobId"`
-	JobName         string               `json:"jobName"`
-	CreatedAt       int64                `json:"createdAt,omitempty"`
-	Status          string               `json:"status"`
-	StatusReason    string               `json:"statusReason,omitempty"`
-	StartedAt       int64                `json:"startedAt,omitempty"`
-	StoppedAt       int64                `json:"stoppedAt,omitempty"`
-	Container       *containerSummary    `json:"container,omitempty"`
-	ArrayProperties *arrayPropertiesWire `json:"arrayProperties,omitempty"`
-	JobDefinition   string               `json:"jobDefinition,omitempty"`
-	ShareIdentifier string               `json:"shareIdentifier,omitempty"`
-	IsCancelled     *bool                `json:"isCancelled,omitempty"`
-	IsTerminated    *bool                `json:"isTerminated,omitempty"`
+	JobArn          string                     `json:"jobArn"`
+	JobID           string                     `json:"jobId"`
+	JobName         string                     `json:"jobName"`
+	CreatedAt       int64                      `json:"createdAt,omitempty"`
+	Status          string                     `json:"status"`
+	StatusReason    string                     `json:"statusReason,omitempty"`
+	StartedAt       int64                      `json:"startedAt,omitempty"`
+	StoppedAt       int64                      `json:"stoppedAt,omitempty"`
+	Container       *containerSummary          `json:"container,omitempty"`
+	ArrayProperties *arrayPropertiesWire       `json:"arrayProperties,omitempty"`
+	NodeProperties  *nodePropertiesSummaryWire `json:"nodeProperties,omitempty"`
+	JobDefinition   string                     `json:"jobDefinition,omitempty"`
+	ShareIdentifier string                     `json:"shareIdentifier,omitempty"`
+	IsCancelled     *bool                      `json:"isCancelled,omitempty"`
+	IsTerminated    *bool                      `json:"isTerminated,omitempty"`
 }
 
 type listJobsResponse struct {
@@ -248,6 +265,22 @@ func arrayToWire(ap *driver.ArrayProperties) *arrayPropertiesWire {
 	return &arrayPropertiesWire{Size: ap.Size, Index: ap.Index, StatusSummary: ap.StatusSummary}
 }
 
+func nodeDetailsToWire(nd *driver.NodeDetails) *nodeDetailsWire {
+	if nd == nil {
+		return nil
+	}
+
+	return &nodeDetailsWire{NodeIndex: nd.NodeIndex, IsMainNode: nd.IsMainNode}
+}
+
+func nodeSummaryToWire(nd *driver.NodeDetails) *nodePropertiesSummaryWire {
+	if nd == nil {
+		return nil
+	}
+
+	return &nodePropertiesSummaryWire{IsMainNode: nd.IsMainNode, NumNodes: nd.NumNodes, NodeIndex: nd.NodeIndex}
+}
+
 func boolPtrIf(b bool) *bool {
 	if !b {
 		return nil
@@ -282,6 +315,7 @@ func toJobDetail(j *driver.Job) jobDetail {
 		JobDefinition:        j.JobDefinition,
 		Parameters:           params,
 		Container:            j.Container,
+		NodeDetails:          nodeDetailsToWire(j.NodeDetails),
 		NodeProperties:       j.NodeProperties,
 		EcsProperties:        j.EcsProperties,
 		EksProperties:        j.EksProperties,
@@ -311,6 +345,7 @@ func toJobSummary(j *driver.Job) jobSummary {
 		StartedAt:       j.StartedAt,
 		StoppedAt:       j.StoppedAt,
 		ArrayProperties: arrayToWire(j.ArrayProperties),
+		NodeProperties:  nodeSummaryToWire(j.NodeDetails),
 		JobDefinition:   j.JobDefinition,
 		ShareIdentifier: j.ShareIdentifier,
 		IsCancelled:     boolPtrIf(j.IsCancelled),
