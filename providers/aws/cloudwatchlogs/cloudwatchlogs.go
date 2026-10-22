@@ -59,6 +59,7 @@ type Mock struct {
 	monitoring mondriver.Monitoring
 	lambda     LambdaInvoker
 	keys       KeyResolver
+	queries    *memstore.Store[queryRecord]
 
 	// queryResultKmsKey is the account-wide key associated with Logs Insights
 	// query results (AssociateKmsKey on the query-result resource).
@@ -67,6 +68,9 @@ type Mock struct {
 	// keyed by filterPeriodKey.
 	periods map[string]filterPeriod
 	mu      sync.RWMutex
+	// admitMu makes StartQuery's concurrent-query count and its insert one
+	// step. Settling only moves queries out of Running, so it needs no lock.
+	admitMu sync.Mutex
 }
 
 // SetMonitoring sets the monitoring backend for auto-metric generation.
@@ -95,6 +99,7 @@ func (m *Mock) emitMetric(metricName string, value float64, unit string, dims ma
 func New(opts *config.Options) *Mock {
 	return &Mock{
 		groups:  memstore.New[*logGroup](),
+		queries: memstore.New[queryRecord](),
 		opts:    opts,
 		periods: map[string]filterPeriod{},
 	}
