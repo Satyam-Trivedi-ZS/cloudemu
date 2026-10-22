@@ -56,6 +56,20 @@ func errClusterParameterGroupNotFound(name string) error {
 	return cerrors.Newf(cerrors.NotFound, "DB cluster parameter group %q not found", name)
 }
 
+// missingGroupErr is the error for a modify/reset of a DB or cluster parameter
+// group that is not stored. A "default.<family>" group always exists in RDS (and
+// DescribeDB[Cluster]ParameterGroups lists it), but its parameters are fixed:
+// real RDS answers "Cannot modify a default parameter group." with
+// InvalidParameterValue rather than denying the group exists. Any other name
+// is genuinely unknown and gets notFound.
+func missingGroupErr(name string, notFound error) error {
+	if _, isDefault := defaultGroupFamily(name); isDefault {
+		return cerrors.New(cerrors.InvalidArgument, "Cannot modify a default parameter group.")
+	}
+
+	return notFound
+}
+
 func applyMethodOrDefault(m string) string {
 	if m == "" {
 		return "pending-reboot"
@@ -177,7 +191,7 @@ func (m *Mock) ModifyDBParameterGroup(_ context.Context, name string, params []r
 
 	pg, ok := m.paramGroups.Get(name)
 	if !ok {
-		return nil, errParameterGroupNotFound(name)
+		return nil, missingGroupErr(name, errParameterGroupNotFound(name))
 	}
 
 	pg.Parameters = withParams(pg.Parameters, params)
@@ -253,7 +267,7 @@ func (m *Mock) ResetDBParameterGroup(_ context.Context, name string, params []st
 
 	pg, ok := m.paramGroups.Get(name)
 	if !ok {
-		return nil, errParameterGroupNotFound(name)
+		return nil, missingGroupErr(name, errParameterGroupNotFound(name))
 	}
 
 	if resetAll {
@@ -399,7 +413,7 @@ func (m *Mock) ModifyDBClusterParameterGroup(
 
 	pg, ok := m.clusterParamGroups.Get(name)
 	if !ok {
-		return nil, errClusterParameterGroupNotFound(name)
+		return nil, missingGroupErr(name, errClusterParameterGroupNotFound(name))
 	}
 
 	pg.Parameters = withParams(pg.Parameters, params)
@@ -457,7 +471,7 @@ func (m *Mock) ResetDBClusterParameterGroup(
 
 	pg, ok := m.clusterParamGroups.Get(name)
 	if !ok {
-		return nil, errClusterParameterGroupNotFound(name)
+		return nil, missingGroupErr(name, errClusterParameterGroupNotFound(name))
 	}
 
 	if resetAll {

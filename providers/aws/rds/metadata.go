@@ -24,6 +24,7 @@ const (
 	arnKindClusterParamGroup = "cluster-pg"
 	arnKindOptionGroup       = "og"
 	arnKindSubnetGroup       = "subgrp"
+	arnKindEventSubscription = "es"
 	arnFieldCount            = 7
 )
 
@@ -332,27 +333,37 @@ func (m *Mock) recordTags(kind, id string) (map[string]string, bool) {
 	return nil, false
 }
 
-// isGroupKind reports whether an ARN kind is a parameter/option/subnet group.
+// isGroupKind reports whether an ARN kind keeps its tags in groupTags (keyed
+// by ARN) rather than on its record: parameter/option/subnet groups and event
+// subscriptions.
 func isGroupKind(kind string) bool {
 	switch kind {
-	case arnKindParamGroup, arnKindClusterParamGroup, arnKindOptionGroup, arnKindSubnetGroup:
+	case arnKindParamGroup, arnKindClusterParamGroup, arnKindOptionGroup, arnKindSubnetGroup,
+		arnKindEventSubscription:
 		return true
 	default:
 		return false
 	}
 }
 
-// groupExists reports whether a parameter/option/subnet group named id exists.
+// groupExists reports whether a parameter/option/subnet group or event
+// subscription named id exists. A "default.<family>" DB / cluster parameter
+// group always exists (DescribeDB[Cluster]ParameterGroups resolves it), so it
+// is taggable like a stored group.
 func (m *Mock) groupExists(kind, id string) bool {
+	_, isDefault := defaultGroupFamily(id)
+
 	switch kind {
 	case arnKindParamGroup:
-		return m.paramGroups.Has(id)
+		return m.paramGroups.Has(id) || isDefault
 	case arnKindClusterParamGroup:
-		return m.clusterParamGroups.Has(id)
+		return m.clusterParamGroups.Has(id) || isDefault
 	case arnKindOptionGroup:
 		return m.optionGroups.Has(id)
 	case arnKindSubnetGroup:
 		return m.subnetGroups.Has(id)
+	case arnKindEventSubscription:
+		return m.eventSubs.Has(id)
 	default:
 		return false
 	}

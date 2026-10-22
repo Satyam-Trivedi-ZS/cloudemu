@@ -525,6 +525,26 @@ func (m *Mock) newInstance(ctx context.Context, cfg rdsdriver.InstanceConfig) rd
 	}
 }
 
+// upgradedDefaultGroup returns the parameter group a resource is on after its
+// engine version changes to newVersion. A resource on a "default.<family>"
+// group moves to the default group of the new version's family (postgres 15.4
+// on default.postgres15 upgraded to 16.2 lands on default.postgres16), as real
+// RDS does for a major version upgrade; a minor upgrade keeps the same family
+// and so the same name. A custom group, or an engine with no known family, is
+// left unchanged. An explicit DBParameterGroupName on the same request is
+// applied afterwards and wins.
+func upgradedDefaultGroup(current, engine, newVersion string) string {
+	if _, isDefault := defaultGroupFamily(current); !isDefault {
+		return current
+	}
+
+	if next := defaultParameterGroupName(engine, newVersion); next != "" {
+		return next
+	}
+
+	return current
+}
+
 // defaultParameterGroupName returns the DB parameter group real RDS assigns to
 // an instance whose caller supplied none: "default." + the parameter-group
 // family of the instance's resolved engine version (e.g. postgres 15.4 ->
@@ -774,6 +794,7 @@ func applyDeferrableMods(inst *rdsdriver.Instance, input *rdsdriver.ModifyInstan
 
 	if input.EngineVersion != "" {
 		inst.EngineVersion = input.EngineVersion
+		inst.DBParameterGroupName = upgradedDefaultGroup(inst.DBParameterGroupName, inst.Engine, input.EngineVersion)
 	}
 
 	if input.MultiAZ != nil {
@@ -1132,20 +1153,14 @@ func (m *Mock) CreateCluster(ctx context.Context, cfg rdsdriver.ClusterConfig) (
 		maintenanceWindow = defaultMaintenanceWindow
 	}
 
-	// Real RDS associates the default DB cluster parameter group "for the
-	// specified DB engine and version" when the caller names none
-	// (CreateDBCluster API reference, DBClusterParameterGroupName).
-	clusterParamGroup := cfg.DBClusterParameterGroupName
-	if clusterParamGroup == "" {
-		clusterParamGroup = defaultParameterGroupName(cfg.Engine, cfg.EngineVersion)
-	}
+	engineVersion, clusterParamGroup := clusterVersionAndParamGroup(&cfg)
 
 	region := regionctx.RegionOr(ctx, m.opts.Region)
 	cluster := rdsdriver.Cluster{
 		ID:                               cfg.ID,
 		ARN:                              clusterARN(region, m.opts.AccountID, cfg.ID),
 		Engine:                           cfg.Engine,
-		EngineVersion:                    cfg.EngineVersion,
+		EngineVersion:                    engineVersion,
 		MasterUsername:                   cfg.MasterUsername,
 		DatabaseName:                     cfg.DatabaseName,
 		Endpoint:                         endpointFor(cfg.ID, region, "cluster"),
@@ -1177,6 +1192,27 @@ func (m *Mock) CreateCluster(ctx context.Context, cfg rdsdriver.ClusterConfig) (
 	out := cluster
 
 	return &out, nil
+}
+
+// clusterVersionAndParamGroup resolves a new cluster's engine version and DB
+// cluster parameter group. An omitted EngineVersion resolves to the engine's
+// default version (as newInstance does for instances), so the reported
+// EngineVersion and the version-derived default group always agree. An
+// omitted group is the default DB cluster parameter group "for the specified
+// DB engine and version" (CreateDBCluster API reference,
+// DBClusterParameterGroupName).
+func clusterVersionAndParamGroup(cfg *rdsdriver.ClusterConfig) (engineVersion, paramGroup string) {
+	engineVersion = cfg.EngineVersion
+	if engineVersion == "" {
+		engineVersion = defaultEngineVersion(cfg.Engine)
+	}
+
+	paramGroup = cfg.DBClusterParameterGroupName
+	if paramGroup == "" {
+		paramGroup = defaultParameterGroupName(cfg.Engine, engineVersion)
+	}
+
+	return engineVersion, paramGroup
 }
 
 // DescribeClusters returns all clusters if ids is empty, else only matching ones.
@@ -1218,6 +1254,8 @@ func (m *Mock) DescribeClusters(_ context.Context, ids []string) ([]rdsdriver.Cl
 func applyClusterModify(cluster *rdsdriver.Cluster, input rdsdriver.ModifyInstanceInput) {
 	if input.EngineVersion != "" {
 		cluster.EngineVersion = input.EngineVersion
+		cluster.DBClusterParameterGroupName = upgradedDefaultGroup(
+			cluster.DBClusterParameterGroupName, cluster.Engine, input.EngineVersion)
 	}
 
 	if input.DBClusterParameterGroupName != "" {

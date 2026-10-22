@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 
 	"github.com/stackshy/cloudemu/v2/internal/snapshot"
 	rdsdriver "github.com/stackshy/cloudemu/v2/services/relationaldb/driver"
@@ -104,9 +105,35 @@ func (m *Mock) snapshotScalarState(snap *rdsSnapshot) {
 		snap.ClusterCreds = creds
 	}
 
-	snap.GroupTags = m.groupTags
-	snap.RootPasswords = m.rootPasswords
-	snap.Events = m.events
+	// Copy every map and slice while the read lock is held: json.Marshal runs
+	// after it is released, and writers mutate groupTags / rootPasswords in
+	// place, so handing out the live values would race with them.
+	if len(m.groupTags) > 0 {
+		tags := make(map[string]map[string]string, len(m.groupTags))
+		for arn, t := range m.groupTags {
+			tags[arn] = maps.Clone(t)
+		}
+
+		snap.GroupTags = tags
+	}
+
+	snap.RootPasswords = maps.Clone(m.rootPasswords)
+	snap.Events = cloneEvents(m.events)
+}
+
+// cloneEvents deep-copies the event log (each event's category slice too).
+func cloneEvents(events []rdsdriver.Event) []rdsdriver.Event {
+	if len(events) == 0 {
+		return nil
+	}
+
+	out := make([]rdsdriver.Event, len(events))
+	for i := range events {
+		out[i] = events[i]
+		out[i].EventCategories = cloneSlice(events[i].EventCategories)
+	}
+
+	return out
 }
 
 // Restore rebuilds the mock's state under the original identities: every
@@ -182,7 +209,8 @@ func (m *Mock) restoreScalarState(snap *rdsSnapshot) {
 		m.rootPasswords = snap.RootPasswords
 	}
 
-	if snap.Events != nil {
-		m.events = snap.Events
-	}
+	// The event log is replaced unconditionally: a snapshot taken before any
+	// event was recorded omits the key, and restoring it must clear the log
+	// rather than keep events about resources the snapshot does not contain.
+	m.events = snap.Events
 }
