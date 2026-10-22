@@ -401,30 +401,34 @@ func (m *Mock) DeleteSecretWithOptions(
 
 	now := m.opts.Clock.Now().UTC()
 
+	// The replica check and the delete happen under one write lock, so a
+	// concurrent ReplicateSecretToRegions (which also takes sd.mu and refuses a
+	// secret marked for deletion) can't slip in between them.
+	sd.mu.Lock()
+
 	// Real Secrets Manager refuses to delete a primary secret that still has
 	// replicas: they must be removed with RemoveRegionsFromReplication first
 	// (https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_DeleteSecret.html).
-	sd.mu.RLock()
-	replicated := len(sd.info.ReplicationStatus) > 0
-	sd.mu.RUnlock()
+	if len(sd.info.ReplicationStatus) > 0 {
+		sd.mu.Unlock()
 
-	if replicated {
 		return nil, "", errors.New(errors.FailedPrecondition,
 			"You can't delete a primary secret that is replicated to other Regions. "+
 				"Remove the replicas with RemoveRegionsFromReplication first.")
 	}
 
 	if force {
-		sd.mu.RLock()
+		// Mark the secret deleted before releasing the lock so any call that
+		// grabs it before the store removal below sees it as gone.
+		sd.deletedAt = now
 		info := sd.info
-		sd.mu.RUnlock()
+		sd.mu.Unlock()
 
 		m.secrets.Delete(name)
 
 		return &info, now.Format(time.RFC3339), nil
 	}
 
-	sd.mu.Lock()
 	defer sd.mu.Unlock()
 
 	if !sd.deletedAt.IsZero() {

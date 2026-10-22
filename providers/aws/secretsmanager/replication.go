@@ -2,6 +2,7 @@ package secretsmanager
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"time"
 
@@ -29,6 +30,29 @@ const (
 	replicaStatusMessageInSync = "Replication succeeded"
 )
 
+// regionNamePattern and maxRegionNameLen are the RegionType constraints from
+// the Secrets Manager API model. cloudemu has no authoritative list of AWS
+// Regions, so a replica Region is checked against the Region-code shape:
+// that catches typos such as "not-a-region" or "eu-west", but a well-formed
+// code that isn't a real Region is still accepted.
+var regionNamePattern = regexp.MustCompile(`^([a-z]+-)+\d+$`)
+
+const maxRegionNameLen = 128
+
+// validateReplicaRegion rejects a replica Region that is empty or isn't shaped
+// like a Region code, as InvalidParameterException.
+func validateReplicaRegion(region string) error {
+	if region == "" {
+		return errors.New(errors.InvalidArgument, "a replica Region is required")
+	}
+
+	if len(region) > maxRegionNameLen || !regionNamePattern.MatchString(region) {
+		return errors.Newf(errors.InvalidArgument, "Invalid Region: %s is not a valid Region code", region)
+	}
+
+	return nil
+}
+
 // addReplicas validates add against the existing replica list and the
 // primary Region and returns a NEW slice (existing is never mutated, so
 // SecretInfo copies that share it stay consistent) with the added replicas
@@ -45,9 +69,9 @@ func addReplicas(
 	copy(out, existing)
 
 	for _, r := range add {
-		region := strings.TrimSpace(r.Region)
-		if region == "" {
-			return nil, errors.New(errors.InvalidArgument, "a replica Region is required")
+		region := r.Region
+		if err := validateReplicaRegion(region); err != nil {
+			return nil, err
 		}
 
 		if region == primaryRegion {
@@ -162,6 +186,7 @@ func (m *Mock) ReplicateSecretToRegions(
 
 	sd.info.ReplicationStatus = replicas
 	sd.info.PrimaryRegion = m.primaryRegion(sd)
+	sd.info.UpdatedAt = m.opts.Clock.Now().UTC().Format(time.RFC3339)
 
 	info := sd.info
 
@@ -201,6 +226,7 @@ func (m *Mock) RemoveRegionsFromReplication(
 	}
 
 	sd.info.ReplicationStatus = remaining
+	sd.info.UpdatedAt = m.opts.Clock.Now().UTC().Format(time.RFC3339)
 
 	info := sd.info
 

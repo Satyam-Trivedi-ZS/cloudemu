@@ -339,3 +339,77 @@ func TestSDKScheduledForDeletionMessage(t *testing.T) {
 		t.Fatalf("CreateSecret over deleted name err = %v", err)
 	}
 }
+
+// TestSDKReplicaRegionMustBeRegionCode checks a replica Region that isn't
+// shaped like a Region code is rejected on CreateSecret and
+// ReplicateSecretToRegions, so a typo can't leave a phantom replica that then
+// blocks DeleteSecret.
+func TestSDKReplicaRegionMustBeRegionCode(t *testing.T) {
+	client, _ := newClockedSecretsClient(t)
+	ctx := context.Background()
+
+	var ipe *smtypes.InvalidParameterException
+	if _, err := client.CreateSecret(ctx, &awssm.CreateSecretInput{
+		Name: aws.String("bad"), SecretString: aws.String("x"),
+		AddReplicaRegions: []smtypes.ReplicaRegionType{{Region: aws.String("not-a-region")}},
+	}); !errors.As(err, &ipe) {
+		t.Fatalf("CreateSecret bad replica Region err = %v, want InvalidParameterException", err)
+	}
+
+	mustCreate(t, client, &awssm.CreateSecretInput{Name: aws.String("ok"), SecretString: aws.String("x")})
+
+	if _, err := client.ReplicateSecretToRegions(ctx, &awssm.ReplicateSecretToRegionsInput{
+		SecretId: aws.String("ok"), AddReplicaRegions: []smtypes.ReplicaRegionType{{Region: aws.String("eu-west")}},
+	}); !errors.As(err, &ipe) {
+		t.Fatalf("ReplicateSecretToRegions bad Region err = %v, want InvalidParameterException", err)
+	}
+
+	if _, err := client.DeleteSecret(ctx, &awssm.DeleteSecretInput{SecretId: aws.String("ok")}); err != nil {
+		t.Fatalf("DeleteSecret after rejected replication: %v", err)
+	}
+}
+
+// TestSDKReplicationUpdatesLastChangedDate checks adding and removing replicas
+// moves DescribeSecret's LastChangedDate, which AWS defines as the last time
+// the secret was modified in any way.
+func TestSDKReplicationUpdatesLastChangedDate(t *testing.T) {
+	client, fc := newClockedSecretsClient(t)
+	ctx := context.Background()
+
+	mustCreate(t, client, &awssm.CreateSecretInput{Name: aws.String("rep"), SecretString: aws.String("x")})
+
+	lastChanged := func() time.Time {
+		t.Helper()
+
+		desc, err := client.DescribeSecret(ctx, &awssm.DescribeSecretInput{SecretId: aws.String("rep")})
+		if err != nil {
+			t.Fatalf("DescribeSecret: %v", err)
+		}
+
+		return aws.ToTime(desc.LastChangedDate)
+	}
+
+	fc.Advance(time.Hour)
+
+	if _, err := client.ReplicateSecretToRegions(ctx, &awssm.ReplicateSecretToRegionsInput{
+		SecretId: aws.String("rep"), AddReplicaRegions: []smtypes.ReplicaRegionType{{Region: aws.String("eu-west-3")}},
+	}); err != nil {
+		t.Fatalf("ReplicateSecretToRegions: %v", err)
+	}
+
+	if got := lastChanged(); !got.Equal(fc.Now().UTC().Truncate(time.Second)) {
+		t.Fatalf("LastChangedDate after replicate = %v, want %v", got, fc.Now().UTC())
+	}
+
+	fc.Advance(time.Hour)
+
+	if _, err := client.RemoveRegionsFromReplication(ctx, &awssm.RemoveRegionsFromReplicationInput{
+		SecretId: aws.String("rep"), RemoveReplicaRegions: []string{"eu-west-3"},
+	}); err != nil {
+		t.Fatalf("RemoveRegionsFromReplication: %v", err)
+	}
+
+	if got := lastChanged(); !got.Equal(fc.Now().UTC().Truncate(time.Second)) {
+		t.Fatalf("LastChangedDate after remove = %v, want %v", got, fc.Now().UTC())
+	}
+}

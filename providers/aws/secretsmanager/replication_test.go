@@ -3,6 +3,7 @@ package secretsmanager
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -229,4 +230,106 @@ func TestRestoreBackfillsPrimaryRegionFromARN(t *testing.T) {
 	info, err := m.SecretMetadata(ctx, "old")
 	require.NoError(t, err)
 	assert.Equal(t, "eu-central-1", info.PrimaryRegion)
+}
+
+func TestReplicaRegionNameValidated(t *testing.T) {
+	for _, region := range []string{"not-a-region", "eu-west", "EU-WEST-1", "euwest1", "eu-west-1 "} {
+		t.Run(region, func(t *testing.T) {
+			m := newTestMock()
+			ctx := context.Background()
+
+			_, err := m.CreateSecret(ctx, driver.SecretConfig{
+				Name: "c", AddReplicaRegions: []driver.SecretReplicaRegion{{Region: region}},
+			}, []byte("v"))
+			require.Error(t, err)
+			assert.Equal(t, errors.InvalidArgument, errors.GetCode(err))
+
+			_, getErr := m.GetSecret(ctx, "c")
+			assert.True(t, errors.IsNotFound(getErr), "rejected create must not store the secret")
+
+			createTestSecret(t, m, "s", "v")
+
+			_, err = m.ReplicateSecretToRegions(ctx, "s", []driver.SecretReplicaRegion{{Region: region}}, false)
+			assert.Equal(t, errors.InvalidArgument, errors.GetCode(err))
+
+			meta, err := m.SecretMetadata(ctx, "s")
+			require.NoError(t, err)
+			assert.Empty(t, meta.ReplicationStatus)
+		})
+	}
+}
+
+func TestReplicationStampsLastChangedDate(t *testing.T) {
+	m, fc := newClockedMock()
+	ctx := context.Background()
+	createTestSecret(t, m, "s", "v")
+
+	created, err := m.GetSecret(ctx, "s")
+	require.NoError(t, err)
+
+	fc.Advance(time.Hour)
+
+	info, err := m.ReplicateSecretToRegions(ctx, "s", []driver.SecretReplicaRegion{{Region: "eu-west-3"}}, false)
+	require.NoError(t, err)
+	assert.Equal(t, fc.Now().UTC().Format(time.RFC3339), info.UpdatedAt)
+	assert.NotEqual(t, created.UpdatedAt, info.UpdatedAt)
+
+	fc.Advance(time.Hour)
+
+	info, err = m.RemoveRegionsFromReplication(ctx, "s", []string{"eu-west-3"})
+	require.NoError(t, err)
+	assert.Equal(t, fc.Now().UTC().Format(time.RFC3339), info.UpdatedAt)
+
+	got, err := m.GetSecret(ctx, "s")
+	require.NoError(t, err)
+	assert.Equal(t, info.UpdatedAt, got.UpdatedAt)
+}
+
+// TestDeleteAndReplicateAreAtomic races DeleteSecret against
+// ReplicateSecretToRegions on the same secret. Whatever the interleaving, a
+// secret must never end up both scheduled for deletion (or force-deleted) and
+// replicated: exactly one of the two calls may win.
+func TestDeleteAndReplicateAreAtomic(t *testing.T) {
+	ctx := context.Background()
+
+	for _, force := range []bool{false, true} {
+		for i := 0; i < 500; i++ {
+			m := newTestMock()
+			createTestSecret(t, m, "s", "v")
+
+			var (
+				wg             sync.WaitGroup
+				delErr, repErr error
+				start          = make(chan struct{})
+			)
+
+			wg.Add(2)
+
+			go func() {
+				defer wg.Done()
+				<-start
+				_, _, delErr = m.DeleteSecretWithOptions(ctx, "s", nil, force)
+			}()
+
+			go func() {
+				defer wg.Done()
+				<-start
+				_, repErr = m.ReplicateSecretToRegions(ctx, "s",
+					[]driver.SecretReplicaRegion{{Region: "eu-west-3"}}, false)
+			}()
+
+			close(start)
+			wg.Wait()
+
+			require.False(t, delErr == nil && repErr == nil,
+				"force=%v: both DeleteSecret and ReplicateSecretToRegions succeeded", force)
+
+			if sd, ok := m.secrets.Get("s"); ok {
+				sd.mu.RLock()
+				bad := !sd.deletedAt.IsZero() && len(sd.info.ReplicationStatus) > 0
+				sd.mu.RUnlock()
+				require.False(t, bad, "secret is scheduled for deletion and replicated")
+			}
+		}
+	}
 }
