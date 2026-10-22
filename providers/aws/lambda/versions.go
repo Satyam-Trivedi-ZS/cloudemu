@@ -212,10 +212,12 @@ func (m *Mock) GetVersionAWSConfig(ctx context.Context, name, version string) (d
 // can be removed, deleting $LATEST is rejected, and a version an alias still
 // references cannot be removed until the alias is deleted. It backs the AWS
 // server handler's version-scoped DeleteFunction (?Qualifier= or a
-// "name:qualifier" FunctionName); an unqualified DeleteFunction still removes the
-// whole function (all versions and aliases) via DeleteFunction. It has no Azure
-// Functions / GCP Cloud Functions equivalent, so it is an AWS-only capability
-// asserted by the handler rather than part of the portable Serverless driver.
+// "name:qualifier" FunctionName). Deleting a numbered version that does not
+// exist is a no-op success; a missing function is ResourceNotFoundException. An
+// unqualified DeleteFunction still removes the whole function (all versions and
+// aliases) via DeleteFunction. It has no Azure Functions / GCP Cloud Functions
+// equivalent, so it is an AWS-only capability asserted by the handler rather
+// than part of the portable Serverless driver.
 func (m *Mock) DeleteVersion(ctx context.Context, name, qualifier string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -239,6 +241,14 @@ func (m *Mock) DeleteVersion(ctx context.Context, name, qualifier string) error 
 	}
 
 	if !m.versionExists(&fd, qualifier) {
+		// Real Lambda treats deleting a numbered version the function does not
+		// have as a no-op success: version-scoped DeleteFunction is idempotent
+		// while the function exists. Any other unknown qualifier keeps the
+		// emulator's not-found error (real behavior for it is unverified).
+		if isVersionQualifier(qualifier) {
+			return nil
+		}
+
 		return cerrors.Newf(cerrors.NotFound, "function version %s not found", qualifier)
 	}
 

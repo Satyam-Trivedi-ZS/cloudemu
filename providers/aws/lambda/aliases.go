@@ -67,7 +67,8 @@ func (m *Mock) UpdateAlias(ctx context.Context, cfg driver.AliasConfig) (*driver
 
 	ad, ok := fd.aliases.Get(cfg.Name)
 	if !ok {
-		return nil, cerrors.Newf(cerrors.NotFound, "alias %s not found", cfg.Name)
+		// Real Lambda's UpdateAlias text names the alias-qualified function ARN.
+		return nil, cerrors.Newf(cerrors.NotFound, "Alias not found: %s:%s", fd.info.ARN, cfg.Name)
 	}
 
 	// ad is a shared pointer held in the store; guard the read-validate-mutate of
@@ -121,6 +122,11 @@ func (m *Mock) UpdateAlias(ctx context.Context, cfg driver.AliasConfig) (*driver
 // provisioned concurrency config and event invoke config. Real Lambda keeps
 // these as sub-resources of the alias ARN, so a later alias with the same name
 // starts with none of them instead of inheriting the old grants.
+//
+// Deleting an alias the function does not have succeeds without changing
+// anything, as real Lambda does (HTTP 204; ResourceNotFoundException is not in
+// the DeleteAlias error list). A missing function is still
+// ResourceNotFoundException.
 func (m *Mock) DeleteAlias(ctx context.Context, functionName, aliasName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -131,7 +137,7 @@ func (m *Mock) DeleteAlias(ctx context.Context, functionName, aliasName string) 
 	}
 
 	if !fd.aliases.Has(aliasName) {
-		return cerrors.Newf(cerrors.NotFound, "alias %s not found", aliasName)
+		return nil
 	}
 
 	fd.aliases.Delete(aliasName)
