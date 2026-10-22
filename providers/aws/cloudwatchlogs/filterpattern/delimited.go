@@ -249,6 +249,29 @@ func (p *delimPattern) extract(message string) map[string]string {
 
 func positional(i int) string { return "$" + strconv.Itoa(i+1) }
 
+// validRef reports whether "$name" names one of the pattern's fields, or
+// "$N" is a position the pattern can bind. Without an ellipsis (and with at
+// least one field) a message binds exactly as many fields as the pattern
+// lists; an ellipsis or the match-all "[]" leaves the count open.
+func (p *delimPattern) validRef(ref string) bool {
+	name, ok := strings.CutPrefix(ref, "$")
+	if !ok || name == "" {
+		return false
+	}
+
+	if n, err := strconv.Atoi(name); err == nil {
+		return n >= 1 && (p.hasEllipsis || len(p.fields) == 0 || n <= len(p.fields))
+	}
+
+	for _, f := range p.fields {
+		if f.name == name {
+			return true
+		}
+	}
+
+	return false
+}
+
 // tokenizeMessage splits a log event into space-delimited fields. Text in
 // double quotes or square brackets is one field, without its delimiters.
 func tokenizeMessage(message string) []string {
