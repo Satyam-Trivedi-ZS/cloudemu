@@ -29,16 +29,20 @@ type Handler struct {
 	// subscriptionLifetime bounds one SubscribeToShard connection and
 	// subscriptionPoll is how often it pushes newly arrived records; see
 	// streaming_ops.go. Tests shorten them so they never wait real minutes.
-	subscriptionLifetime time.Duration
-	subscriptionPoll     time.Duration
+	// subscriptionHeartbeat is how long an idle subscription waits before
+	// pushing an empty event.
+	subscriptionLifetime  time.Duration
+	subscriptionPoll      time.Duration
+	subscriptionHeartbeat time.Duration
 }
 
 // New returns a Kinesis handler backed by d.
 func New(d kinesisdriver.Kinesis) *Handler {
 	h := &Handler{
-		kinesis:              d,
-		subscriptionLifetime: defaultSubscriptionLifetime,
-		subscriptionPoll:     defaultSubscriptionPoll,
+		kinesis:               d,
+		subscriptionLifetime:  defaultSubscriptionLifetime,
+		subscriptionPoll:      defaultSubscriptionPoll,
+		subscriptionHeartbeat: defaultSubscriptionHeartbeat,
 	}
 	h.routes = map[string]http.HandlerFunc{
 		"CreateStream":                  h.createStream,

@@ -2,6 +2,7 @@ package kinesis_test
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/stackshy/cloudemu/v2"
 	kinesisserver "github.com/stackshy/cloudemu/v2/server/aws/kinesis"
+	"github.com/stackshy/cloudemu/v2/server/wire"
 )
 
 // liveFixture is a Kinesis wire server whose SubscribeToShard lifetime and poll
@@ -30,13 +32,28 @@ type liveFixture struct {
 func newLiveFixture(t *testing.T, lifetime time.Duration) *liveFixture {
 	t.Helper()
 
+	return newLiveFixtureWith(t, lifetime, nil, nil)
+}
+
+// newLiveFixtureWith is newLiveFixture plus an optional handler tweak (e.g. a
+// shorter heartbeat) and an optional shutdown notifier stamped onto every
+// request's base context, the way cloudemu serve does.
+func newLiveFixtureWith(
+	t *testing.T, lifetime time.Duration, tweak func(*kinesisserver.Handler), shutdown *wire.ShutdownNotifier,
+) *liveFixture {
+	t.Helper()
+
 	cloud := cloudemu.NewAWS()
 	h := kinesisserver.New(cloud.Kinesis)
 	h.SetSubscriptionTimings(lifetime, 20*time.Millisecond)
 
+	if tweak != nil {
+		tweak(h)
+	}
+
 	f := &liveFixture{}
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.Header.Get("X-Amz-Target"), ".SubscribeToShard") {
 			f.active.Add(1)
 			defer f.active.Add(-1)
@@ -44,6 +61,12 @@ func newLiveFixture(t *testing.T, lifetime time.Duration) *liveFixture {
 
 		h.ServeHTTP(w, r)
 	}))
+
+	if shutdown != nil {
+		ts.Config.BaseContext = func(net.Listener) context.Context { return shutdown.Context(context.Background()) }
+	}
+
+	ts.Start()
 	t.Cleanup(ts.Close)
 
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background(),
@@ -256,6 +279,72 @@ func TestSDKSubscribeToShardSignalsShardEnd(t *testing.T) {
 
 	if end.ContinuationSequenceNumber != nil {
 		t.Fatalf("shard-end continuation = %q, want nil", aws.ToString(end.ContinuationSequenceNumber))
+	}
+
+	f.waitNoActive(t)
+}
+
+// TestSDKSubscribeToShardHeartbeatsWhenIdle: real enhanced fan-out keeps
+// sending empty SubscribeToShardEvents on a quiet shard (KCL restarts a
+// subscription that delivers nothing for ~35s), each carrying the unchanged
+// continuation so the consumer's checkpoint still advances.
+func TestSDKSubscribeToShardHeartbeatsWhenIdle(t *testing.T) {
+	f := newLiveFixtureWith(t, time.Minute, func(h *kinesisserver.Handler) {
+		h.SetSubscriptionHeartbeat(100 * time.Millisecond)
+	}, nil)
+
+	stream, _ := f.subscribe(t, "idle", kinesistypes.ShardIteratorTypeLatest)
+	defer stream.Close()
+
+	first := nextEvent(t, stream)
+	if first == nil {
+		t.Fatal("want the initial event")
+	}
+
+	cont := aws.ToString(first.ContinuationSequenceNumber)
+
+	for i := range 2 {
+		ev := nextEvent(t, stream)
+		if ev == nil {
+			t.Fatalf("heartbeat %d: stream closed on an idle shard", i)
+		}
+
+		if len(ev.Records) != 0 || aws.ToString(ev.ContinuationSequenceNumber) != cont {
+			t.Fatalf("heartbeat %d = %+v, want empty records with continuation %q", i, ev, cont)
+		}
+	}
+
+	// A record written after heartbeats still arrives with its own continuation.
+	putData(t, f.c, "idle", "late")
+
+	ev := nextEvent(t, stream)
+	for ev != nil && len(ev.Records) == 0 {
+		ev = nextEvent(t, stream)
+	}
+
+	if ev == nil || string(ev.Records[0].Data) != "late" {
+		t.Fatalf("event after heartbeats = %+v, want the %q record", ev, "late")
+	}
+}
+
+// TestSDKSubscribeToShardEndsOnServerShutdown: when the serving process begins
+// a graceful shutdown, open subscriptions end promptly instead of holding the
+// shutdown open until its timeout (the subscription lifetime here is a minute).
+func TestSDKSubscribeToShardEndsOnServerShutdown(t *testing.T) {
+	shutdown := wire.NewShutdownNotifier()
+	f := newLiveFixtureWith(t, time.Minute, nil, shutdown)
+
+	stream, _ := f.subscribe(t, "shutdown", kinesistypes.ShardIteratorTypeLatest)
+	defer stream.Close()
+
+	if nextEvent(t, stream) == nil {
+		t.Fatal("want the initial event")
+	}
+
+	shutdown.Notify()
+
+	if ev := nextEvent(t, stream); ev != nil {
+		t.Fatalf("want the stream to end on shutdown, got event %+v", ev)
 	}
 
 	f.waitNoActive(t)

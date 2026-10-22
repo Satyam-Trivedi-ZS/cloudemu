@@ -8,3 +8,9 @@ func (h *Handler) SetSubscriptionTimings(lifetime, poll time.Duration) {
 	h.subscriptionLifetime = lifetime
 	h.subscriptionPoll = poll
 }
+
+// SetSubscriptionHeartbeat shortens how long an idle subscription waits before
+// pushing an empty event.
+func (h *Handler) SetSubscriptionHeartbeat(d time.Duration) {
+	h.subscriptionHeartbeat = d
+}

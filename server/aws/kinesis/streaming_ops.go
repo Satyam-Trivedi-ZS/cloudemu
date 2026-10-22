@@ -31,6 +31,12 @@ const (
 	// defaultSubscriptionPoll is how often an open subscription checks the shard
 	// for newly written records to push.
 	defaultSubscriptionPoll = 200 * time.Millisecond
+	// defaultSubscriptionHeartbeat is how long an idle subscription goes without
+	// an event before it pushes an empty one. Real enhanced fan-out keeps sending
+	// empty SubscribeToShardEvents (roughly every 5s) that carry the
+	// continuation and MillisBehindLatest, and KCL 2.x restarts a subscription
+	// that delivers nothing for ~35s.
+	defaultSubscriptionHeartbeat = 5 * time.Second
 )
 
 // startingPositionJSON is the {Type,SequenceNumber,Timestamp} wire shape of a
@@ -99,10 +105,12 @@ func (h *Handler) subscribeToShard(w http.ResponseWriter, r *http.Request) {
 }
 
 // pushSubscription keeps a subscription live: every poll interval it reads the
-// records written after the continuation cursor and pushes them as one event.
-// It runs on the request goroutine (no goroutines to leak) and returns when the
-// client goes away (ctx), the lifetime elapses, the shard ends, the write
-// fails, or the shard/consumer disappears (pushed as an in-stream exception).
+// records written after the continuation cursor and pushes them as one event,
+// and an idle shard still gets an empty event every heartbeat interval. It runs
+// on the request goroutine (no goroutines to leak) and returns when the client
+// goes away (ctx), the server begins shutting down, the lifetime elapses, the
+// shard ends, the write fails, or the shard/consumer disappears (pushed as an
+// in-stream exception).
 func (h *Handler) pushSubscription(ctx context.Context, es *eventStream, consumerARN, shardID, cont string) {
 	lifetime := time.NewTimer(h.subscriptionLifetime)
 	defer lifetime.Stop()
@@ -110,15 +118,10 @@ func (h *Handler) pushSubscription(ctx context.Context, es *eventStream, consume
 	tick := time.NewTicker(h.subscriptionPoll)
 	defer tick.Stop()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-lifetime.C:
-			return
-		case <-tick.C:
-		}
+	shutdown := wire.ShutdownSignal(ctx)
+	lastEvent := time.Now()
 
+	for awaitTick(ctx, shutdown, lifetime.C, tick.C) {
 		res, err := h.kinesis.SubscribeToShard(ctx, kinesisdriver.SubscribeToShardInput{
 			ConsumerARN:            consumerARN,
 			ShardID:                shardID,
@@ -132,8 +135,9 @@ func (h *Handler) pushSubscription(ctx context.Context, es *eventStream, consume
 		}
 
 		// Nothing new on an open shard: keep waiting rather than pushing an
-		// empty event every tick.
-		if len(res.Records) == 0 && res.ContinuationSequenceNumber != "" {
+		// empty event every tick, but send one once the heartbeat interval has
+		// passed so an idle subscription still shows progress.
+		if idleWithinHeartbeat(res, lastEvent, h.subscriptionHeartbeat) {
 			continue
 		}
 
@@ -141,8 +145,32 @@ func (h *Handler) pushSubscription(ctx context.Context, es *eventStream, consume
 			return
 		}
 
+		lastEvent = time.Now()
 		cont = res.ContinuationSequenceNumber
 	}
+}
+
+// awaitTick blocks until the next poll tick and reports true, or reports false
+// once the client goes away, the server begins shutting down, or the
+// subscription lifetime elapses.
+func awaitTick(ctx context.Context, shutdown <-chan struct{}, lifetime, tick <-chan time.Time) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-shutdown:
+		return false
+	case <-lifetime:
+		return false
+	case <-tick:
+		return true
+	}
+}
+
+// idleWithinHeartbeat reports whether a poll found nothing new on an open shard
+// and the last event went out less than one heartbeat ago, so nothing needs
+// pushing yet.
+func idleWithinHeartbeat(res *kinesisdriver.SubscribeToShardResult, lastEvent time.Time, heartbeat time.Duration) bool {
+	return len(res.Records) == 0 && res.ContinuationSequenceNumber != "" && time.Since(lastEvent) < heartbeat
 }
 
 // eventStream is an open application/vnd.amazon.eventstream response.
