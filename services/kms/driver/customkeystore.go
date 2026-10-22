@@ -102,4 +102,8 @@ type CustomKeyStores interface {
 	DeleteCustomKeyStore(ctx context.Context, id string) error
 	ConnectCustomKeyStore(ctx context.Context, id string) error
 	DisconnectCustomKeyStore(ctx context.Context, id string) error
+	// GenerateRandomInCustomKeyStore serves GenerateRandom with a CustomKeyStoreId.
+	// The bytes come from the store's CloudHSM cluster, so the store must
+	// exist, be a CloudHSM store, and be CONNECTED.
+	GenerateRandomInCustomKeyStore(ctx context.Context, id string, numberOfBytes int32) ([]byte, error)
 }

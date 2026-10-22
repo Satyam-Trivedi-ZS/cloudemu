@@ -10746,6 +10746,10 @@
         "name": "GenerateRandom"
       },
       {
+        "name": "GenerateRandomInCustomKeyStore",
+        "doc": "GenerateRandomInCustomKeyStore serves GenerateRandom with a CustomKeyStoreId."
+      },
+      {
         "name": "GetKeyPolicy",
         "doc": "Key policies."
       },
@@ -10900,6 +10904,10 @@
           },
           {
             "name": "DisconnectCustomKeyStore"
+          },
+          {
+            "name": "GenerateRandomInCustomKeyStore",
+            "doc": "GenerateRandomInCustomKeyStore serves GenerateRandom with a CustomKeyStoreId."
           },
           {
             "name": "UpdateCustomKeyStore"

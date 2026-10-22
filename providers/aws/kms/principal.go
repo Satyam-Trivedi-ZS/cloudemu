@@ -27,20 +27,15 @@ var (
 const arnFieldCount = 6
 
 // validateGrantPrincipal checks a grant principal. KMS documents the value as
-// "the ARN of an AWS principal" (accounts, IAM users, roles, federated users,
-// assumed-role users); a value that is not a well-formed IAM/STS principal ARN
-// is rejected with InvalidArnException. Values outside the modeled
-// PrincipalIdType constraint fail with ValidationException. Service principals
-// and bare account IDs are accepted, since AWS services and older clients
-// create grants with those forms.
-//
-//nolint:gocyclo // a flat sequence of the documented principal-format checks
+// "the ARN of an AWS principal": an account (iam ...:root), an IAM user or
+// role, a federated user, or an assumed-role user. A value that is not one of
+// those ARN forms is rejected with InvalidArnException. Values outside the
+// modeled PrincipalIdType constraint fail with ValidationException. Service
+// principals and bare account IDs are accepted, since AWS services and older
+// clients create grants with those forms.
 func validateGrantPrincipal(field, p string) error {
-	if len(p) > maxPrincipalLen || !principalPattern.MatchString(p) {
-		return errors.Newf(errors.InvalidArgument,
-			"1 validation error detected: Value at '%s' failed to satisfy constraint: "+
-				"Member must satisfy regular expression pattern: ^[\\w+=,.@:/-]+$ "+
-				"and have length less than or equal to %d", lowerFirst(field), maxPrincipalLen)
+	if err := validatePrincipalConstraint(field, p); err != nil {
+		return err
 	}
 
 	if !strings.HasPrefix(p, "arn:") {
@@ -52,14 +47,57 @@ func validateGrantPrincipal(field, p string) error {
 			"%s %s is not a valid principal ARN", field, p)
 	}
 
-	parts := strings.SplitN(p, ":", arnFieldCount)
-	if len(parts) != arnFieldCount || parts[1] == "" || parts[4] == "" || parts[5] == "" ||
-		(parts[2] != "iam" && parts[2] != "sts") {
+	if !isPrincipalARN(p) {
 		return driver.NewAPIError(driver.ExInvalidArn, errors.InvalidArgument,
 			"%s %s does not refer to a valid principal", field, p)
 	}
 
 	return nil
+}
+
+// validatePrincipalConstraint enforces the modeled PrincipalIdType length and
+// pattern, with the message AWS returns for a failed constraint.
+func validatePrincipalConstraint(field, p string) error {
+	const prefix = "1 validation error detected: Value '%s' at '%s' failed to satisfy constraint: "
+
+	if len(p) > maxPrincipalLen {
+		return errors.Newf(errors.InvalidArgument,
+			prefix+"Member must have length less than or equal to %d", p, lowerFirst(field), maxPrincipalLen)
+	}
+
+	if !principalPattern.MatchString(p) {
+		return errors.Newf(errors.InvalidArgument,
+			prefix+"Member must satisfy regular expression pattern: ^[\\w+=,.@:/-]+$", p, lowerFirst(field))
+	}
+
+	return nil
+}
+
+// isPrincipalARN reports whether arn names a principal a grant can be given
+// to: arn:<partition>:iam::<account>:root|user/...|role/... or
+// arn:<partition>:sts::<account>:assumed-role/...|federated-user/.... IAM
+// and STS principal ARNs are global, so the Region field must be empty.
+func isPrincipalARN(arn string) bool {
+	parts := strings.SplitN(arn, ":", arnFieldCount)
+	if len(parts) != arnFieldCount || parts[1] == "" || parts[3] != "" || !accountIDPattern.MatchString(parts[4]) {
+		return false
+	}
+
+	resource := parts[5]
+
+	switch parts[2] {
+	case "iam":
+		return resource == "root" || hasNamedPrefix(resource, "user/") || hasNamedPrefix(resource, "role/")
+	case "sts":
+		return hasNamedPrefix(resource, "assumed-role/") || hasNamedPrefix(resource, "federated-user/")
+	default:
+		return false
+	}
+}
+
+// hasNamedPrefix reports whether s is prefix followed by a non-empty name.
+func hasNamedPrefix(s, prefix string) bool {
+	return strings.HasPrefix(s, prefix) && len(s) > len(prefix)
 }
 
 func lowerFirst(s string) string {

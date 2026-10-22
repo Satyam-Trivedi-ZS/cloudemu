@@ -141,7 +141,17 @@ func (h *Handler) generateDataKeyPairWithoutPlaintext(w http.ResponseWriter, r *
 
 func (h *Handler) generateRandom(w http.ResponseWriter, r *http.Request) {
 	dispatch(h, w, r, func(h *Handler, ctx context.Context, req *generateRandomRequest) (any, error) {
-		out, err := h.kms.GenerateRandom(ctx, req.NumberOfBytes)
+		var (
+			out []byte
+			err error
+		)
+
+		if req.CustomKeyStoreID != "" {
+			out, err = h.kms.GenerateRandomInCustomKeyStore(ctx, req.CustomKeyStoreID, req.NumberOfBytes)
+		} else {
+			out, err = h.kms.GenerateRandom(ctx, req.NumberOfBytes)
+		}
+
 		if err != nil {
 			return nil, err
 		}

@@ -61,6 +61,30 @@ func (m *Mock) customKeyStoreConnected(id string) bool {
 	return ok && s.ConnectionState == driver.ConnectionStateConnected
 }
 
+// keyUnavailable reports whether a key is in the Unavailable state: it lives in
+// a custom key store that is not CONNECTED. A PendingDeletion key keeps that
+// state while its store is disconnected, so its deletion can still be
+// canceled. Caller holds kd.mu.
+func (m *Mock) keyUnavailable(kd *keyData) bool {
+	return kd.meta.CustomKeyStoreID != "" && kd.meta.KeyState != driver.StatePendingDeletion &&
+		!m.customKeyStoreConnected(kd.meta.CustomKeyStoreID)
+}
+
+// keyMetadata returns the key's metadata as KMS reports it. The stored state
+// is kept as is (EnableKey/DisableKey on an Unavailable key take effect once
+// the store reconnects); only the reported state is Unavailable while the
+// key's store is not connected. Caller holds kd.mu.
+func (m *Mock) keyMetadata(kd *keyData) driver.KeyMetadata {
+	out := kd.meta
+
+	if m.keyUnavailable(kd) {
+		out.KeyState = driver.StateUnavailable
+		out.Enabled = false
+	}
+
+	return out
+}
+
 // keyGone reports whether a key no longer counts as living in its store: real
 // KMS deletes a PendingDeletion key once its waiting period ends.
 func (m *Mock) keyGone(kd *keyData) bool {
@@ -101,8 +125,9 @@ func (m *Mock) customKeyStoreForNewKey(in *driver.CreateKeyInput, origin, spec, 
 	}
 
 	if spec != driver.SpecSymmetricDefault || usage != driver.UsageEncryptDecrypt || in.MultiRegion {
-		// Only single-Region symmetric encryption keys can live in a custom key store.
-		return nil, driver.ErrUnsupportedOperation
+		return nil, driver.WithMessage(driver.ErrUnsupportedOperation,
+			"Custom key stores support only single-Region symmetric encryption keys "+
+				"(KeySpec SYMMETRIC_DEFAULT, KeyUsage ENCRYPT_DECRYPT, MultiRegion false)")
 	}
 
 	if store.ConnectionState != driver.ConnectionStateConnected {
@@ -687,4 +712,30 @@ func (m *Mock) transitionStore(id string, fn func(*driver.CustomKeyStore) error)
 	m.customKeyStores.Set(id, &next)
 
 	return nil
+}
+
+// GenerateRandomInCustomKeyStore generates random bytes in a custom key
+// store's CloudHSM cluster. KMS rejects an external key store with
+// UnsupportedOperationException and a store that isn't CONNECTED with
+// CustomKeyStoreInvalidStateException.
+func (m *Mock) GenerateRandomInCustomKeyStore(ctx context.Context, id string, numberOfBytes int32) ([]byte, error) {
+	if err := validateRandomBytes(numberOfBytes); err != nil {
+		return nil, err
+	}
+
+	s, ok := m.customKeyStores.Get(id)
+	if !ok {
+		return nil, cksNotFound(id)
+	}
+
+	if s.CustomKeyStoreType == driver.CustomKeyStoreTypeExternal {
+		return nil, driver.WithMessage(driver.ErrUnsupportedOperation,
+			"GenerateRandom is not supported for external key store %s", id)
+	}
+
+	if s.ConnectionState != driver.ConnectionStateConnected {
+		return nil, cksInvalidState("Custom key store %s is not connected (ConnectionState %s)", id, s.ConnectionState)
+	}
+
+	return m.GenerateRandom(ctx, numberOfBytes)
 }

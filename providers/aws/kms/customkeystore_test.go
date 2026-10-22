@@ -1,13 +1,10 @@
 package kms_test
 
 import (
-	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
 	"errors"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,314 +13,6 @@ import (
 	"github.com/stackshy/cloudemu/v2/providers/aws/kms"
 	"github.com/stackshy/cloudemu/v2/services/kms/driver"
 )
-
-func wantException(t *testing.T, err error, exception string) {
-	t.Helper()
-
-	var apiErr *driver.APIError
-	if !errors.As(err, &apiErr) || apiErr.Exception != exception {
-		t.Fatalf("err = %v, want %s", err, exception)
-	}
-}
-
-// --- DeriveSharedSecret (ECDH) ---
-
-func TestDeriveSharedSecretMatchesLocalECDH(t *testing.T) {
-	ctx := context.Background()
-	m := newMock(t)
-
-	for _, tc := range []struct {
-		spec  string
-		curve elliptic.Curve
-	}{
-		{driver.SpecECCNISTP256, elliptic.P256()},
-		{driver.SpecECCNISTP384, elliptic.P384()},
-		{driver.SpecECCNISTP521, elliptic.P521()},
-	} {
-		t.Run(tc.spec, func(t *testing.T) {
-			k, err := m.CreateKey(ctx, driver.CreateKeyInput{KeySpec: tc.spec, KeyUsage: driver.UsageKeyAgreement})
-			if err != nil {
-				t.Fatalf("CreateKey KEY_AGREEMENT: %v", err)
-			}
-
-			if len(k.KeyAgreementAlgorithms) != 1 || k.KeyAgreementAlgorithms[0] != driver.KeyAgreementECDH {
-				t.Fatalf("KeyAgreementAlgorithms = %v, want [ECDH]", k.KeyAgreementAlgorithms)
-			}
-
-			if len(k.SigningAlgorithms) != 0 || len(k.EncryptionAlgorithms) != 0 {
-				t.Fatalf("unexpected algorithms on KEY_AGREEMENT key: %+v", k)
-			}
-
-			// Bob's key pair lives outside KMS.
-			bob, err := ecdsa.GenerateKey(tc.curve, rand.Reader)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			bobPub, err := x509.MarshalPKIXPublicKey(&bob.PublicKey)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			out, err := m.DeriveSharedSecret(ctx, driver.DeriveSharedSecretInput{
-				KeyID: k.KeyID, KeyAgreementAlgorithm: driver.KeyAgreementECDH, PublicKey: bobPub,
-			})
-			if err != nil {
-				t.Fatalf("DeriveSharedSecret: %v", err)
-			}
-
-			if out.KeyAgreementAlgorithm != driver.KeyAgreementECDH || out.KeyOrigin != driver.OriginAWSKMS {
-				t.Fatalf("output = %+v", out)
-			}
-
-			// Bob derives the same secret from Alice's (KMS) public key.
-			pk, err := m.GetPublicKey(ctx, driver.GetPublicKeyInput{KeyID: k.KeyID})
-			if err != nil {
-				t.Fatalf("GetPublicKey: %v", err)
-			}
-
-			if len(pk.KeyAgreementAlgorithms) != 1 {
-				t.Fatalf("GetPublicKey KeyAgreementAlgorithms = %v", pk.KeyAgreementAlgorithms)
-			}
-
-			parsed, err := x509.ParsePKIXPublicKey(pk.PublicKey)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			alicePub, err := parsed.(*ecdsa.PublicKey).ECDH()
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			bobECDH, err := bob.ECDH()
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			want, err := bobECDH.ECDH(alicePub)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			if !bytes.Equal(out.SharedSecret, want) {
-				t.Fatalf("shared secret mismatch:\n kms   %x\n local %x", out.SharedSecret, want)
-			}
-		})
-	}
-}
-
-func TestDeriveSharedSecretErrors(t *testing.T) {
-	ctx := context.Background()
-	m := newMock(t)
-
-	agree, err := m.CreateKey(ctx, driver.CreateKeyInput{KeySpec: driver.SpecECCNISTP256, KeyUsage: driver.UsageKeyAgreement})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	signKey, err := m.CreateKey(ctx, driver.CreateKeyInput{KeySpec: driver.SpecECCNISTP256, KeyUsage: driver.UsageSignVerify})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	peer256, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	peerDER, _ := x509.MarshalPKIXPublicKey(&peer256.PublicKey)
-
-	peer384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	peer384DER, _ := x509.MarshalPKIXPublicKey(&peer384.PublicKey)
-
-	// SIGN_VERIFY key → InvalidKeyUsageException.
-	_, err = m.DeriveSharedSecret(ctx, driver.DeriveSharedSecretInput{
-		KeyID: signKey.KeyID, KeyAgreementAlgorithm: driver.KeyAgreementECDH, PublicKey: peerDER,
-	})
-	if !errors.Is(err, driver.ErrInvalidKeyUsage) {
-		t.Fatalf("sign key: err = %v, want ErrInvalidKeyUsage", err)
-	}
-
-	// Peer on a different curve → validation error.
-	_, err = m.DeriveSharedSecret(ctx, driver.DeriveSharedSecretInput{
-		KeyID: agree.KeyID, KeyAgreementAlgorithm: driver.KeyAgreementECDH, PublicKey: peer384DER,
-	})
-	if !cerrors.IsInvalidArgument(err) {
-		t.Fatalf("curve mismatch: err = %v, want InvalidArgument", err)
-	}
-
-	// Garbage public key / bad algorithm → validation error.
-	if _, err = m.DeriveSharedSecret(ctx, driver.DeriveSharedSecretInput{
-		KeyID: agree.KeyID, KeyAgreementAlgorithm: driver.KeyAgreementECDH, PublicKey: []byte("nope"),
-	}); !cerrors.IsInvalidArgument(err) {
-		t.Fatalf("bad DER: err = %v", err)
-	}
-
-	if _, err = m.DeriveSharedSecret(ctx, driver.DeriveSharedSecretInput{
-		KeyID: agree.KeyID, KeyAgreementAlgorithm: "XDH", PublicKey: peerDER,
-	}); !cerrors.IsInvalidArgument(err) {
-		t.Fatalf("bad algorithm: err = %v", err)
-	}
-
-	// Disabled key → DisabledException.
-	if err := m.DisableKey(ctx, agree.KeyID); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = m.DeriveSharedSecret(ctx, driver.DeriveSharedSecretInput{
-		KeyID: agree.KeyID, KeyAgreementAlgorithm: driver.KeyAgreementECDH, PublicKey: peerDER,
-	})
-	if !errors.Is(err, driver.ErrKeyDisabled) {
-		t.Fatalf("disabled: err = %v", err)
-	}
-
-	// A KEY_AGREEMENT key can't sign.
-	if err := m.EnableKey(ctx, agree.KeyID); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = m.Sign(ctx, driver.SignInput{
-		KeyID: agree.KeyID, Message: []byte("x"), MessageType: driver.MessageTypeRaw,
-		SigningAlgorithm: driver.SignECDSASHA256,
-	})
-	if !errors.Is(err, driver.ErrInvalidKeyUsage) {
-		t.Fatalf("sign with KEY_AGREEMENT key: err = %v", err)
-	}
-}
-
-func TestCreateKeyKeyAgreementSpecRules(t *testing.T) {
-	ctx := context.Background()
-	m := newMock(t)
-
-	for _, spec := range []string{driver.SpecSymmetricDefault, driver.SpecRSA2048, driver.SpecHMAC256} {
-		if _, err := m.CreateKey(ctx, driver.CreateKeyInput{KeySpec: spec, KeyUsage: driver.UsageKeyAgreement}); !cerrors.IsInvalidArgument(err) {
-			t.Fatalf("%s + KEY_AGREEMENT: err = %v, want InvalidArgument", spec, err)
-		}
-	}
-}
-
-func TestKeyAgreementKeySurvivesSnapshot(t *testing.T) {
-	ctx := context.Background()
-	src := newMock(t)
-
-	k, err := src.CreateKey(ctx, driver.CreateKeyInput{KeySpec: driver.SpecECCNISTP256, KeyUsage: driver.UsageKeyAgreement})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	peer, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	peerDER, _ := x509.MarshalPKIXPublicKey(&peer.PublicKey)
-
-	before, err := src.DeriveSharedSecret(ctx, driver.DeriveSharedSecretInput{
-		KeyID: k.KeyID, KeyAgreementAlgorithm: driver.KeyAgreementECDH, PublicKey: peerDER,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	snap, err := src.Snapshot(ctx, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	dst := newMock(t)
-	if err := dst.Restore(ctx, snap); err != nil {
-		t.Fatal(err)
-	}
-
-	after, err := dst.DeriveSharedSecret(ctx, driver.DeriveSharedSecretInput{
-		KeyID: k.KeyID, KeyAgreementAlgorithm: driver.KeyAgreementECDH, PublicKey: peerDER,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !bytes.Equal(before.SharedSecret, after.SharedSecret) {
-		t.Fatal("shared secret changed across snapshot/restore")
-	}
-}
-
-// --- reserved aws: tag prefix ---
-
-func TestReservedAWSTagPrefixRejected(t *testing.T) {
-	ctx := context.Background()
-	m := newMock(t)
-
-	_, err := m.CreateKey(ctx, driver.CreateKeyInput{Tags: map[string]string{"aws:cloudformation:stack-name": "x"}})
-	wantException(t, err, driver.ExTag)
-
-	k, err := m.CreateKey(ctx, driver.CreateKeyInput{Tags: map[string]string{"team": "a", "awsome": "ok"}})
-	if err != nil {
-		t.Fatalf("CreateKey with normal tags: %v", err)
-	}
-
-	for _, key := range []string{"aws:foo", "AWS:Foo", "Aws:bar"} {
-		err := m.TagResource(ctx, k.KeyID, map[string]string{"ok": "1", key: "v"})
-		wantException(t, err, driver.ExTag)
-	}
-
-	tags, err := m.ListResourceTags(ctx, k.KeyID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(tags) != 2 || tags["ok"] != "" {
-		t.Fatalf("rejected TagResource must not partially apply; tags = %v", tags)
-	}
-
-	if err := m.TagResource(ctx, k.KeyID, map[string]string{"owner": "me"}); err != nil {
-		t.Fatalf("TagResource normal: %v", err)
-	}
-}
-
-// --- CreateGrant principal validation ---
-
-func TestCreateGrantPrincipalValidation(t *testing.T) {
-	ctx := context.Background()
-	m := newMock(t)
-
-	k, err := m.CreateKey(ctx, driver.CreateKeyInput{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ops := []string{driver.GrantOpEncrypt}
-
-	valid := []string{
-		"arn:aws:iam::111122223333:root",
-		"arn:aws:iam::111122223333:user/alice",
-		"arn:aws:iam::111122223333:role/ExampleRole",
-		"arn:aws:sts::111122223333:assumed-role/ExampleRole/session",
-		"arn:aws:sts::111122223333:federated-user/bob",
-		"arn:aws-us-gov:iam::111122223333:role/r",
-		"dynamodb.us-east-1.amazonaws.com",
-		"111122223333",
-	}
-	for _, p := range valid {
-		if _, _, err := m.CreateGrant(ctx, driver.CreateGrantInput{KeyID: k.KeyID, GranteePrincipal: p, Operations: ops}); err != nil {
-			t.Errorf("GranteePrincipal %q rejected: %v", p, err)
-		}
-	}
-
-	for _, p := range []string{"not-an-arn", "alice", "arn:aws:s3:::bucket", "arn:aws:iam", "arn:aws:iam:::role/x"} {
-		_, _, err := m.CreateGrant(ctx, driver.CreateGrantInput{KeyID: k.KeyID, GranteePrincipal: p, Operations: ops})
-		wantException(t, err, driver.ExInvalidArn)
-	}
-
-	// Outside the modeled pattern → ValidationException (no exception tag).
-	_, _, err = m.CreateGrant(ctx, driver.CreateGrantInput{KeyID: k.KeyID, GranteePrincipal: "has space", Operations: ops})
-	if !cerrors.IsInvalidArgument(err) {
-		t.Fatalf("pattern violation: err = %v", err)
-	}
-
-	var apiErr *driver.APIError
-	if errors.As(err, &apiErr) {
-		t.Fatalf("pattern violation should be a plain validation error, got %s", apiErr.Exception)
-	}
-
-	// RetiringPrincipal is validated the same way.
-	_, _, err = m.CreateGrant(ctx, driver.CreateGrantInput{
-		KeyID: k.KeyID, GranteePrincipal: valid[0], RetiringPrincipal: "bogus", Operations: ops,
-	})
-	wantException(t, err, driver.ExInvalidArn)
-}
 
 // --- custom key stores ---
 
@@ -658,4 +347,318 @@ func TestCustomKeyStoreSnapshotRoundTrip(t *testing.T) {
 		CustomKeyStoreName: "persisted", CloudHsmClusterID: "cluster-zzzzzzzzzzz", TrustAnchorCertificate: testTA, KeyStorePassword: "kmsPswd1",
 	})
 	wantException(t, err, driver.ExCustomKeyStoreNameInUse)
+}
+
+func wantKeyState(t *testing.T, m *kms.Mock, keyID, state string, enabled bool) {
+	t.Helper()
+
+	md, err := m.DescribeKey(context.Background(), keyID)
+	if err != nil {
+		t.Fatalf("DescribeKey: %v", err)
+	}
+
+	if md.KeyState != state || md.Enabled != enabled {
+		t.Fatalf("DescribeKey state = %s enabled=%v, want %s enabled=%v", md.KeyState, md.Enabled, state, enabled)
+	}
+
+	keys, err := m.ListKeys(context.Background())
+	if err != nil {
+		t.Fatalf("ListKeys: %v", err)
+	}
+
+	for i := range keys {
+		if keys[i].KeyID == keyID && keys[i].KeyState != state {
+			t.Fatalf("ListKeys state = %s, want %s", keys[i].KeyState, state)
+		}
+	}
+}
+
+func wantUnavailable(t *testing.T, err error) {
+	t.Helper()
+
+	if !errors.Is(err, driver.ErrKeyInvalidState) || errors.Is(err, driver.ErrKeyDisabled) {
+		t.Fatalf("err = %v, want ErrKeyInvalidState", err)
+	}
+
+	if msg := cerrors.Message(err); !strings.HasSuffix(msg, " is unavailable") {
+		t.Fatalf("message = %q, want '<key ARN> is unavailable'", msg)
+	}
+}
+
+// TestCustomKeyStoreKeyUnavailableWhileDisconnected: a key in a store that is
+// not CONNECTED reports KeyState Unavailable (except PendingDeletion), crypto
+// fails with KMSInvalidStateException even for a Disabled key, and
+// EnableKey/DisableKey take effect once the store reconnects.
+func TestCustomKeyStoreKeyUnavailableWhileDisconnected(t *testing.T) {
+	ctx := context.Background()
+	m := newMock(t)
+
+	id := newHSMStore(t, m, "hsm", testCluster)
+	if err := m.ConnectCustomKeyStore(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	k, err := m.CreateKey(ctx, driver.CreateKeyInput{Origin: driver.OriginAWSCloudHSM, CustomKeyStoreID: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantKeyState(t, m, k.KeyID, driver.StateEnabled, true)
+
+	if err := m.DisconnectCustomKeyStore(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	wantKeyState(t, m, k.KeyID, driver.StateUnavailable, false)
+
+	_, err = m.Encrypt(ctx, driver.EncryptInput{KeyID: k.KeyID, Plaintext: []byte("hi")})
+	wantUnavailable(t, err)
+
+	// DisableKey succeeds, but the key stays Unavailable and crypto still fails
+	// with KMSInvalidStateException rather than DisabledException.
+	if err := m.DisableKey(ctx, k.KeyID); err != nil {
+		t.Fatalf("DisableKey on unavailable key: %v", err)
+	}
+
+	wantKeyState(t, m, k.KeyID, driver.StateUnavailable, false)
+
+	_, err = m.GenerateDataKey(ctx, driver.GenerateDataKeyInput{KeyID: k.KeyID, KeySpec: "AES_256"})
+	wantUnavailable(t, err)
+
+	// A PendingDeletion key keeps that state while its store is disconnected,
+	// and canceling the deletion makes it Unavailable again.
+	if _, err := m.ScheduleKeyDeletion(ctx, k.KeyID, 7); err != nil {
+		t.Fatalf("ScheduleKeyDeletion on unavailable key: %v", err)
+	}
+
+	wantKeyState(t, m, k.KeyID, driver.StatePendingDeletion, false)
+
+	canceled, err := m.CancelKeyDeletion(ctx, k.KeyID)
+	if err != nil || canceled.KeyState != driver.StateUnavailable {
+		t.Fatalf("CancelKeyDeletion = %+v, %v", canceled, err)
+	}
+
+	// Reconnecting reveals the stored state: Disabled.
+	if err := m.ConnectCustomKeyStore(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	wantKeyState(t, m, k.KeyID, driver.StateDisabled, false)
+
+	if _, err := m.Encrypt(ctx, driver.EncryptInput{KeyID: k.KeyID, Plaintext: []byte("hi")}); !errors.Is(err, driver.ErrKeyDisabled) {
+		t.Fatalf("Encrypt on disabled key after reconnect: %v", err)
+	}
+
+	if err := m.EnableKey(ctx, k.KeyID); err != nil {
+		t.Fatal(err)
+	}
+
+	wantKeyState(t, m, k.KeyID, driver.StateEnabled, true)
+
+	// The derived state is never persisted: a snapshot taken while the store
+	// is disconnected restores the stored Enabled state.
+	if err := m.DisconnectCustomKeyStore(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := m.Snapshot(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dst := newMock(t)
+	if err := dst.Restore(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+
+	wantKeyState(t, dst, k.KeyID, driver.StateUnavailable, false)
+
+	if err := dst.ConnectCustomKeyStore(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	wantKeyState(t, dst, k.KeyID, driver.StateEnabled, true)
+}
+
+// TestCustomKeyStoreCreateKeyUnsupportedMessage: a key that can't live in a
+// custom key store fails with UnsupportedOperationException naming the rule.
+func TestCustomKeyStoreCreateKeyUnsupportedMessage(t *testing.T) {
+	ctx := context.Background()
+	m := newMock(t)
+
+	id := newHSMStore(t, m, "hsm", testCluster)
+	if err := m.ConnectCustomKeyStore(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, in := range map[string]driver.CreateKeyInput{
+		"multi-region": {Origin: driver.OriginAWSCloudHSM, CustomKeyStoreID: id, MultiRegion: true},
+		"rsa":          {Origin: driver.OriginAWSCloudHSM, CustomKeyStoreID: id, KeySpec: driver.SpecRSA2048, KeyUsage: driver.UsageSignVerify},
+		"hmac":         {Origin: driver.OriginAWSCloudHSM, CustomKeyStoreID: id, KeySpec: driver.SpecHMAC256, KeyUsage: driver.UsageGenerateVerifyMac},
+	} {
+		_, err := m.CreateKey(ctx, in)
+		if !errors.Is(err, driver.ErrUnsupportedOperation) {
+			t.Fatalf("%s: err = %v, want ErrUnsupportedOperation", name, err)
+		}
+
+		if msg := cerrors.Message(err); !strings.Contains(msg, "only single-Region symmetric encryption keys") {
+			t.Fatalf("%s: message = %q", name, msg)
+		}
+	}
+}
+
+// TestGenerateRandomInCustomKeyStore: GenerateRandom with a CustomKeyStoreId
+// needs an existing, CONNECTED CloudHSM store.
+func TestGenerateRandomInCustomKeyStore(t *testing.T) {
+	ctx := context.Background()
+	m := newMock(t)
+
+	_, err := m.GenerateRandomInCustomKeyStore(ctx, "cks-missing", 16)
+	wantException(t, err, driver.ExCustomKeyStoreNotFound)
+
+	hsm := newHSMStore(t, m, "hsm", testCluster)
+
+	_, err = m.GenerateRandomInCustomKeyStore(ctx, hsm, 16)
+	wantException(t, err, driver.ExCustomKeyStoreInvalidState)
+
+	if _, err := m.GenerateRandomInCustomKeyStore(ctx, hsm, 0); !cerrors.IsInvalidArgument(err) {
+		t.Fatalf("NumberOfBytes 0: %v", err)
+	}
+
+	if err := m.ConnectCustomKeyStore(ctx, hsm); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := m.GenerateRandomInCustomKeyStore(ctx, hsm, 16)
+	if err != nil || len(out) != 16 {
+		t.Fatalf("connected store = %d bytes, %v", len(out), err)
+	}
+
+	xks, err := m.CreateCustomKeyStore(ctx, xksInput("xks", "https://xks.example.com", "/kms/xks/v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.ConnectCustomKeyStore(ctx, xks); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.GenerateRandomInCustomKeyStore(ctx, xks, 16); !errors.Is(err, driver.ErrUnsupportedOperation) {
+		t.Fatalf("external key store: %v", err)
+	}
+}
+
+// TestUpdateExternalKeyStoreConnectivity switches an external key store
+// between PUBLIC_ENDPOINT and VPC_ENDPOINT_SERVICE.
+func TestUpdateExternalKeyStoreConnectivity(t *testing.T) {
+	ctx := context.Background()
+	m := newMock(t)
+
+	const svc = "com.amazonaws.vpce.us-east-1.vpce-svc-0123456789abcdef0"
+
+	id, err := m.CreateCustomKeyStore(ctx, xksInput("xks", "https://xks.example.com", "/kms/xks/v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// To VPC_ENDPOINT_SERVICE: needs a new endpoint and a service name.
+	for _, in := range []driver.UpdateCustomKeyStoreInput{
+		{CustomKeyStoreID: id, XksProxyConnectivity: driver.XksConnectivityVpcEndpointService},
+		{CustomKeyStoreID: id, XksProxyConnectivity: driver.XksConnectivityVpcEndpointService, XksProxyURIEndpoint: "https://vpc.example.com"},
+		{CustomKeyStoreID: id, XksProxyConnectivity: driver.XksConnectivityVpcEndpointService, XksProxyVpcEndpointServiceName: svc},
+	} {
+		if err := m.UpdateCustomKeyStore(ctx, in); !cerrors.IsInvalidArgument(err) {
+			t.Fatalf("update %+v: err = %v, want validation error", in, err)
+		}
+	}
+
+	if err := m.UpdateCustomKeyStore(ctx, driver.UpdateCustomKeyStoreInput{
+		CustomKeyStoreID: id, XksProxyConnectivity: driver.XksConnectivityVpcEndpointService,
+		XksProxyURIEndpoint: "https://vpc.example.com", XksProxyVpcEndpointServiceName: svc,
+		XksProxyVpcEndpointServiceOwner: "111122223333",
+	}); err != nil {
+		t.Fatalf("switch to VPC_ENDPOINT_SERVICE: %v", err)
+	}
+
+	cfg := describeOne(t, m, id).XksProxyConfiguration
+	if cfg.Connectivity != driver.XksConnectivityVpcEndpointService || cfg.URIEndpoint != "https://vpc.example.com" ||
+		cfg.VpcEndpointServiceName != svc || cfg.VpcEndpointServiceOwner != "111122223333" {
+		t.Fatalf("after switch to VPC = %+v", cfg)
+	}
+
+	// Connectivity can only change while DISCONNECTED.
+	if err := m.ConnectCustomKeyStore(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	err = m.UpdateCustomKeyStore(ctx, driver.UpdateCustomKeyStoreInput{
+		CustomKeyStoreID: id, XksProxyConnectivity: driver.XksConnectivityPublicEndpoint, XksProxyURIEndpoint: "https://pub.example.com",
+	})
+	wantException(t, err, driver.ExCustomKeyStoreInvalidState)
+
+	if err := m.DisconnectCustomKeyStore(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	// Back to PUBLIC_ENDPOINT: needs a new endpoint and drops the service.
+	err = m.UpdateCustomKeyStore(ctx, driver.UpdateCustomKeyStoreInput{
+		CustomKeyStoreID: id, XksProxyConnectivity: driver.XksConnectivityPublicEndpoint,
+	})
+	if !cerrors.IsInvalidArgument(err) {
+		t.Fatalf("PUBLIC_ENDPOINT without endpoint: %v", err)
+	}
+
+	if err := m.UpdateCustomKeyStore(ctx, driver.UpdateCustomKeyStoreInput{
+		CustomKeyStoreID: id, XksProxyConnectivity: driver.XksConnectivityPublicEndpoint, XksProxyURIEndpoint: "https://pub.example.com",
+	}); err != nil {
+		t.Fatalf("switch to PUBLIC_ENDPOINT: %v", err)
+	}
+
+	cfg = describeOne(t, m, id).XksProxyConfiguration
+	if cfg.Connectivity != driver.XksConnectivityPublicEndpoint || cfg.URIEndpoint != "https://pub.example.com" ||
+		cfg.VpcEndpointServiceName != "" || cfg.VpcEndpointServiceOwner != "" {
+		t.Fatalf("after switch to PUBLIC = %+v", cfg)
+	}
+}
+
+// TestDescribeCustomKeyStoresOrder: the list is ordered by creation date, then
+// by ID for stores created at the same instant, so paging is stable. The
+// newest store is created first, so map or insertion order can't produce the
+// expected result by accident.
+func TestDescribeCustomKeyStoresOrder(t *testing.T) {
+	ctx := context.Background()
+	clock := config.NewFakeClock(time.Unix(0, 0).Add(time.Hour))
+	m := kms.New(config.NewOptions(config.WithClock(clock), config.WithRegion("us-east-1"), config.WithAccountID("000000000000")))
+
+	newest := newHSMStore(t, m, "newest", "cluster-cccccccccccc")
+
+	clock.Set(time.Unix(0, 0))
+
+	sameTime := []string{
+		newHSMStore(t, m, "a", "cluster-aaaaaaaaaaaa"),
+		newHSMStore(t, m, "b", "cluster-bbbbbbbbbbbb"),
+	}
+
+	xks, err := m.CreateCustomKeyStore(ctx, xksInput("c", "https://xks.example.com", "/kms/xks/v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sameTime = append(sameTime, xks)
+	sort.Strings(sameTime)
+
+	out, err := m.DescribeCustomKeyStores(ctx, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := make([]string, 0, len(out))
+	for i := range out {
+		got = append(got, out[i].CustomKeyStoreID)
+	}
+
+	want := append(sameTime, newest)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
 }

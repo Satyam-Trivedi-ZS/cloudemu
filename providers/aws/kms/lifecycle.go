@@ -212,7 +212,7 @@ func (m *Mock) DescribeKey(_ context.Context, keyID string) (*driver.KeyMetadata
 	kd.mu.RLock()
 	defer kd.mu.RUnlock()
 
-	out := kd.meta
+	out := m.keyMetadata(kd)
 
 	return &out, nil
 }
@@ -224,7 +224,7 @@ func (m *Mock) ListKeys(_ context.Context) ([]driver.KeyMetadata, error) {
 
 	for _, kd := range all {
 		kd.mu.RLock()
-		out = append(out, kd.meta)
+		out = append(out, m.keyMetadata(kd))
 		kd.mu.RUnlock()
 	}
 
@@ -301,7 +301,7 @@ func (m *Mock) ScheduleKeyDeletion(
 		kd.meta.Enabled = false
 		kd.meta.KeyState = driver.StatePendingDeletion
 		kd.meta.DeletionDate = m.now().Add(time.Duration(days) * hoursPerDay * time.Hour)
-		out = kd.meta
+		out = m.keyMetadata(kd)
 
 		return nil
 	})
@@ -323,7 +323,7 @@ func (m *Mock) CancelKeyDeletion(_ context.Context, keyID string) (*driver.KeyMe
 
 		kd.meta.KeyState = driver.StateDisabled
 		kd.meta.DeletionDate = time.Time{}
-		out = kd.meta
+		out = m.keyMetadata(kd)
 
 		return nil
 	})

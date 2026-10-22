@@ -75,7 +75,8 @@ type generateDataKeyPairResponse struct {
 }
 
 type generateRandomRequest struct {
-	NumberOfBytes int32 `json:"NumberOfBytes"`
+	NumberOfBytes    int32  `json:"NumberOfBytes"`
+	CustomKeyStoreID string `json:"CustomKeyStoreId"`
 }
 
 type generateRandomResponse struct {

@@ -149,15 +149,15 @@ func symmetricGCM(material []byte) (cipher.AEAD, error) {
 // operation, returning the sentinel that maps to the precise KMS exception:
 // Disabled → DisabledException, any other non-Enabled state → KMSInvalidState.
 func (m *Mock) requireUsable(kd *keyData) error {
+	// A key in a custom key store whose store is not CONNECTED is Unavailable
+	// whatever its stored state (bar PendingDeletion), and KMS fails crypto on
+	// it with KMSInvalidStateException "<key ARN> is unavailable".
+	if m.keyUnavailable(kd) {
+		return driver.WithMessage(driver.ErrKeyInvalidState, "%s is unavailable", kd.meta.ARN)
+	}
+
 	switch kd.meta.KeyState {
 	case driver.StateEnabled:
-		// A key in a custom key store is only usable while its store is
-		// CONNECTED; real KMS fails crypto on a disconnected store's keys with
-		// KMSInvalidStateException.
-		if kd.meta.CustomKeyStoreID != "" && !m.customKeyStoreConnected(kd.meta.CustomKeyStoreID) {
-			return driver.ErrKeyInvalidState
-		}
-
 		return nil
 	case driver.StateDisabled:
 		return driver.ErrKeyDisabled
@@ -497,8 +497,8 @@ func (m *Mock) GenerateDataKeyWithoutPlaintext(
 
 // GenerateRandom returns cryptographically random bytes.
 func (*Mock) GenerateRandom(_ context.Context, numberOfBytes int32) ([]byte, error) {
-	if numberOfBytes <= 0 || numberOfBytes > maxRandomBytes {
-		return nil, errors.New(errors.InvalidArgument, "NumberOfBytes must be 1-1024")
+	if err := validateRandomBytes(numberOfBytes); err != nil {
+		return nil, err
 	}
 
 	buf := make([]byte, numberOfBytes)
@@ -507,4 +507,12 @@ func (*Mock) GenerateRandom(_ context.Context, numberOfBytes int32) ([]byte, err
 	}
 
 	return buf, nil
+}
+
+func validateRandomBytes(numberOfBytes int32) error {
+	if numberOfBytes <= 0 || numberOfBytes > maxRandomBytes {
+		return errors.New(errors.InvalidArgument, "NumberOfBytes must be 1-1024")
+	}
+
+	return nil
 }

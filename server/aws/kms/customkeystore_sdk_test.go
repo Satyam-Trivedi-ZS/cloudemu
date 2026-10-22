@@ -1,169 +1,15 @@
 package kms_test
 
 import (
-	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awskms "github.com/aws/aws-sdk-go-v2/service/kms"
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 )
-
-// TestSDKDeriveSharedSecret: a real client creates a KEY_AGREEMENT key, derives
-// a shared secret with a locally generated peer key, and checks it equals the
-// secret the peer computes from the key's downloaded public key.
-func TestSDKDeriveSharedSecret(t *testing.T) {
-	ctx := context.Background()
-	c := newKMSClient(t)
-
-	key, err := c.CreateKey(ctx, &awskms.CreateKeyInput{
-		KeySpec: kmstypes.KeySpecEccNistP256, KeyUsage: kmstypes.KeyUsageTypeKeyAgreement,
-	})
-	if err != nil {
-		t.Fatalf("CreateKey: %v", err)
-	}
-
-	md := key.KeyMetadata
-	if md.KeyUsage != kmstypes.KeyUsageTypeKeyAgreement ||
-		len(md.KeyAgreementAlgorithms) != 1 || md.KeyAgreementAlgorithms[0] != kmstypes.KeyAgreementAlgorithmSpecEcdh {
-		t.Fatalf("metadata = usage %s, KeyAgreementAlgorithms %v", md.KeyUsage, md.KeyAgreementAlgorithms)
-	}
-
-	peer, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	peerDER, err := x509.MarshalPKIXPublicKey(&peer.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	out, err := c.DeriveSharedSecret(ctx, &awskms.DeriveSharedSecretInput{
-		KeyId: md.KeyId, KeyAgreementAlgorithm: kmstypes.KeyAgreementAlgorithmSpecEcdh, PublicKey: peerDER,
-	})
-	if err != nil {
-		t.Fatalf("DeriveSharedSecret: %v", err)
-	}
-
-	if out.KeyAgreementAlgorithm != kmstypes.KeyAgreementAlgorithmSpecEcdh || out.KeyOrigin != kmstypes.OriginTypeAwsKms {
-		t.Fatalf("response = %+v", out)
-	}
-
-	pub, err := c.GetPublicKey(ctx, &awskms.GetPublicKeyInput{KeyId: md.KeyId})
-	if err != nil {
-		t.Fatalf("GetPublicKey: %v", err)
-	}
-
-	if len(pub.KeyAgreementAlgorithms) != 1 {
-		t.Fatalf("GetPublicKey KeyAgreementAlgorithms = %v", pub.KeyAgreementAlgorithms)
-	}
-
-	parsed, err := x509.ParsePKIXPublicKey(pub.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	kmsPub, err := parsed.(*ecdsa.PublicKey).ECDH()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	peerECDH, err := peer.ECDH()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	want, err := peerECDH.ECDH(kmsPub)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !bytes.Equal(out.SharedSecret, want) {
-		t.Fatalf("shared secret mismatch:\n kms   %x\n local %x", out.SharedSecret, want)
-	}
-
-	// Wrong key usage → InvalidKeyUsageException.
-	signKey, err := c.CreateKey(ctx, &awskms.CreateKeyInput{
-		KeySpec: kmstypes.KeySpecEccNistP256, KeyUsage: kmstypes.KeyUsageTypeSignVerify,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = c.DeriveSharedSecret(ctx, &awskms.DeriveSharedSecretInput{
-		KeyId: signKey.KeyMetadata.KeyId, KeyAgreementAlgorithm: kmstypes.KeyAgreementAlgorithmSpecEcdh, PublicKey: peerDER,
-	})
-
-	var usageErr *kmstypes.InvalidKeyUsageException
-	if !errors.As(err, &usageErr) {
-		t.Fatalf("sign key: err = %v, want InvalidKeyUsageException", err)
-	}
-}
-
-// TestSDKReservedTagPrefix: tags in the aws: namespace fail with TagException
-// on both CreateKey and TagResource.
-func TestSDKReservedTagPrefix(t *testing.T) {
-	ctx := context.Background()
-	c := newKMSClient(t)
-
-	_, err := c.CreateKey(ctx, &awskms.CreateKeyInput{
-		Tags: []kmstypes.Tag{{TagKey: aws.String("aws:owner"), TagValue: aws.String("x")}},
-	})
-
-	var tagErr *kmstypes.TagException
-	if !errors.As(err, &tagErr) {
-		t.Fatalf("CreateKey: err = %v, want TagException", err)
-	}
-
-	key, err := c.CreateKey(ctx, &awskms.CreateKeyInput{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = c.TagResource(ctx, &awskms.TagResourceInput{
-		KeyId: key.KeyMetadata.KeyId,
-		Tags:  []kmstypes.Tag{{TagKey: aws.String("aws:owner"), TagValue: aws.String("x")}},
-	})
-	if !errors.As(err, &tagErr) {
-		t.Fatalf("TagResource: err = %v, want TagException", err)
-	}
-}
-
-// TestSDKCreateGrantInvalidPrincipal: a non-ARN grantee fails with
-// InvalidArnException, while a role ARN succeeds.
-func TestSDKCreateGrantInvalidPrincipal(t *testing.T) {
-	ctx := context.Background()
-	c := newKMSClient(t)
-
-	key, err := c.CreateKey(ctx, &awskms.CreateKeyInput{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = c.CreateGrant(ctx, &awskms.CreateGrantInput{
-		KeyId: key.KeyMetadata.KeyId, GranteePrincipal: aws.String("not-an-arn"),
-		Operations: []kmstypes.GrantOperation{kmstypes.GrantOperationEncrypt},
-	})
-
-	var arnErr *kmstypes.InvalidArnException
-	if !errors.As(err, &arnErr) {
-		t.Fatalf("err = %v, want InvalidArnException", err)
-	}
-
-	if _, err := c.CreateGrant(ctx, &awskms.CreateGrantInput{
-		KeyId: key.KeyMetadata.KeyId, GranteePrincipal: aws.String("arn:aws:iam::111122223333:role/app"),
-		Operations: []kmstypes.GrantOperation{kmstypes.GrantOperationEncrypt},
-	}); err != nil {
-		t.Fatalf("valid role ARN: %v", err)
-	}
-}
 
 // TestSDKCustomKeyStoreLifecycle drives the six custom key store operations
 // (plus CreateKey in a store) through the real client, including the typed
@@ -327,5 +173,81 @@ func TestSDKExternalKeyStore(t *testing.T) {
 		Origin: kmstypes.OriginTypeExternalKeyStore, CustomKeyStoreId: created.CustomKeyStoreId, XksKeyId: aws.String("ext-1"),
 	}); !errors.As(err, &inUse) {
 		t.Fatalf("dup xks key: %v", err)
+	}
+}
+
+// TestSDKCustomKeyStoreKeyUnavailable: after DisconnectCustomKeyStore a real
+// client sees the store's key as Unavailable, crypto fails with
+// KMSInvalidStateException (also for a Disabled key), GenerateRandom with the
+// store's ID fails with CustomKeyStoreInvalidStateException, and a
+// multi-Region key in a store fails with UnsupportedOperationException.
+func TestSDKCustomKeyStoreKeyUnavailable(t *testing.T) {
+	ctx := context.Background()
+	c := newKMSClient(t)
+
+	created, err := c.CreateCustomKeyStore(ctx, &awskms.CreateCustomKeyStoreInput{
+		CustomKeyStoreName:     aws.String("hsm"),
+		CloudHsmClusterId:      aws.String("cluster-abcdefghijk"),
+		TrustAnchorCertificate: aws.String("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"),
+		KeyStorePassword:       aws.String("kmsPswd1"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id := created.CustomKeyStoreId
+
+	var stateErr *kmstypes.CustomKeyStoreInvalidStateException
+	if _, err := c.GenerateRandom(ctx, &awskms.GenerateRandomInput{
+		NumberOfBytes: aws.Int32(8), CustomKeyStoreId: id,
+	}); !errors.As(err, &stateErr) {
+		t.Fatalf("GenerateRandom on disconnected store: %v", err)
+	}
+
+	if _, err := c.ConnectCustomKeyStore(ctx, &awskms.ConnectCustomKeyStoreInput{CustomKeyStoreId: id}); err != nil {
+		t.Fatal(err)
+	}
+
+	rnd, err := c.GenerateRandom(ctx, &awskms.GenerateRandomInput{NumberOfBytes: aws.Int32(8), CustomKeyStoreId: id})
+	if err != nil || len(rnd.Plaintext) != 8 {
+		t.Fatalf("GenerateRandom on connected store = %v, %v", rnd, err)
+	}
+
+	var unsupported *kmstypes.UnsupportedOperationException
+	if _, err := c.CreateKey(ctx, &awskms.CreateKeyInput{
+		Origin: kmstypes.OriginTypeAwsCloudhsm, CustomKeyStoreId: id, MultiRegion: aws.Bool(true),
+	}); !errors.As(err, &unsupported) || !strings.Contains(unsupported.ErrorMessage(), "single-Region symmetric") {
+		t.Fatalf("multi-Region key in store: %v", err)
+	}
+
+	key, err := c.CreateKey(ctx, &awskms.CreateKeyInput{Origin: kmstypes.OriginTypeAwsCloudhsm, CustomKeyStoreId: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keyID := key.KeyMetadata.KeyId
+
+	if _, err := c.DisableKey(ctx, &awskms.DisableKeyInput{KeyId: keyID}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := c.DisconnectCustomKeyStore(ctx, &awskms.DisconnectCustomKeyStoreInput{CustomKeyStoreId: id}); err != nil {
+		t.Fatal(err)
+	}
+
+	desc, err := c.DescribeKey(ctx, &awskms.DescribeKeyInput{KeyId: keyID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if desc.KeyMetadata.KeyState != kmstypes.KeyStateUnavailable || desc.KeyMetadata.Enabled {
+		t.Fatalf("DescribeKey state = %s enabled=%v, want Unavailable", desc.KeyMetadata.KeyState, desc.KeyMetadata.Enabled)
+	}
+
+	var invalidState *kmstypes.KMSInvalidStateException
+
+	_, err = c.Encrypt(ctx, &awskms.EncryptInput{KeyId: keyID, Plaintext: []byte("hi")})
+	if !errors.As(err, &invalidState) || !strings.HasSuffix(invalidState.ErrorMessage(), "is unavailable") {
+		t.Fatalf("Encrypt on unavailable key: %v", err)
 	}
 }

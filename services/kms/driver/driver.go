@@ -40,6 +40,9 @@ const (
 	StateDisabled        = "Disabled"
 	StatePendingDeletion = "PendingDeletion"
 	StatePendingImport   = "PendingImport"
+	// StateUnavailable is reported for a key in a custom key store while the
+	// store is not connected. It is derived when the key is read, never stored.
+	StateUnavailable = "Unavailable"
 )
 
 // Key origin values.
