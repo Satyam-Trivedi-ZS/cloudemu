@@ -33,11 +33,17 @@ func (m *Mock) settleUntil(d time.Duration) time.Time {
 	return m.now().Add(dur)
 }
 
-// clusterStateLocked returns the cluster's externally visible state: CREATING
+// clusterStateLocked returns the cluster's externally visible state now. The
+// caller holds cd.mu (read or write).
+func (m *Mock) clusterStateLocked(cd *clusterData) string {
+	return clusterStateAt(cd, m.now())
+}
+
+// clusterStateAt returns the cluster's externally visible state at t: CREATING
 // while its create window is open, otherwise the stored state. The caller holds
 // cd.mu (read or write).
-func (m *Mock) clusterStateLocked(cd *clusterData) string {
-	if cd.cluster.State == driver.ClusterStateActive && m.now().Before(cd.readyAt) {
+func clusterStateAt(cd *clusterData, t time.Time) string {
+	if cd.cluster.State == driver.ClusterStateActive && t.Before(cd.readyAt) {
 		return driver.ClusterStateCreating
 	}
 
@@ -53,35 +59,42 @@ func (m *Mock) observedClusterLocked(cd *clusterData) driver.Cluster {
 	return out
 }
 
-// requireActive rejects an update against a cluster that is not ACTIVE. Real
-// MSK accepts no update operations while a cluster is CREATING or DELETING
+// requireActive rejects a write against a cluster that is not ACTIVE: cluster
+// updates, and topic, SCRAM secret and cluster policy writes. Real MSK accepts
+// no API operations on a cluster that is CREATING or DELETING
 // (https://docs.aws.amazon.com/msk/latest/developerguide/msk-cluster-states.html).
 // Without AsyncSettle a cluster is always ACTIVE, so this never fires. The
 // caller holds cd.mu.
 func (m *Mock) requireActive(cd *clusterData) error {
 	if st := m.clusterStateLocked(cd); st != driver.ClusterStateActive {
-		return badRequest("cluster %s is in %s state; update operations require ACTIVE",
+		return badRequest("cluster %s is in %s state; this operation requires ACTIVE",
 			cd.cluster.ClusterARN, st)
 	}
 
 	return nil
 }
 
-// gone reports whether a stored cluster is DELETING and its delete window has
-// elapsed, i.e. real MSK would no longer return it. A DELETING cluster with no
-// window (restored from a snapshot that predates windows) counts as elapsed.
-func (m *Mock) gone(cd *clusterData) bool {
+// goneAt reports whether a stored cluster is DELETING and its delete window has
+// elapsed at t, i.e. real MSK would no longer return it. A DELETING cluster with
+// no window (restored from a snapshot that predates windows) counts as elapsed.
+func goneAt(cd *clusterData, t time.Time) bool {
 	cd.mu.RLock()
 	defer cd.mu.RUnlock()
 
-	return cd.cluster.State == driver.ClusterStateDeleting && !m.now().Before(cd.deleteAt)
+	return cd.cluster.State == driver.ClusterStateDeleting && !t.Before(cd.deleteAt)
 }
 
-// reapIfGone removes a cluster whose DELETING window has elapsed and frees its
-// name, reporting whether it was removed. Removal is lazy (on the next read),
-// mirroring how ELBv2 retires a drained target.
+// reapIfGone removes a cluster whose DELETING window has elapsed now and frees
+// its name, reporting whether it was removed. Request paths call it lazily on
+// read; Tick calls reapIfGoneAt so a finished delete is removed (and persisted)
+// even when nothing reads the cluster.
 func (m *Mock) reapIfGone(arn string, cd *clusterData) bool {
-	if !m.gone(cd) {
+	return m.reapIfGoneAt(arn, cd, m.now())
+}
+
+// reapIfGoneAt is reapIfGone judged at t.
+func (m *Mock) reapIfGoneAt(arn string, cd *clusterData, t time.Time) bool {
+	if !goneAt(cd, t) {
 		return false
 	}
 

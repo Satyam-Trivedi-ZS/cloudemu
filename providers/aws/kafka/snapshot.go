@@ -57,23 +57,10 @@ type replicatorSnapshot struct {
 }
 
 // Snapshot captures the mock's entire state as JSON. includeAssets is unused. MSK holds resource
-// metadata, not bulk object bodies.
+// metadata, not bulk object bodies. Each record is deep-copied under its own
+// lock, so the encoding never reads a map or slice a concurrent writer changes.
 func (m *Mock) Snapshot(_ context.Context, _ bool) (json.RawMessage, error) {
-	snap := kafkaSnapshot{}
-
-	if m.clusters.Len() > 0 {
-		snap.Clusters = make(map[string]*clusterSnapshot, m.clusters.Len())
-
-		for arn, cd := range m.clusters.All() {
-			cd.mu.RLock()
-			snap.Clusters[arn] = &clusterSnapshot{
-				Cluster: cd.cluster, Operations: cd.operations, Topics: cd.topics,
-				ScramSecrets: cd.scramSecrets, Policy: cd.policy, PolicyVersion: cd.policyVersion,
-				ReadyAt: cd.readyAt, DeleteAt: cd.deleteAt, MetricsSampleAt: cd.metricsSampleAt,
-			}
-			cd.mu.RUnlock()
-		}
-	}
+	snap := kafkaSnapshot{Clusters: m.clustersForSnapshot()}
 
 	names, err := m.clusterNames.Snapshot()
 	if err != nil {
@@ -81,46 +68,117 @@ func (m *Mock) Snapshot(_ context.Context, _ bool) (json.RawMessage, error) {
 	}
 
 	snap.ClusterNames = names
-
-	if m.configs.Len() > 0 {
-		snap.Configs = make(map[string]driver.Configuration, m.configs.Len())
-
-		for arn, cd := range m.configs.All() {
-			cd.mu.RLock()
-			snap.Configs[arn] = cd.config
-			cd.mu.RUnlock()
-		}
-	}
-
-	if m.vpcConns.Len() > 0 {
-		snap.VPCConns = make(map[string]driver.VpcConnection, m.vpcConns.Len())
-
-		for arn, vd := range m.vpcConns.All() {
-			vd.mu.RLock()
-			snap.VPCConns[arn] = vd.vpc
-
-			if !vd.readyAt.IsZero() {
-				if snap.VPCConnReadyAt == nil {
-					snap.VPCConnReadyAt = map[string]time.Time{}
-				}
-
-				snap.VPCConnReadyAt[arn] = vd.readyAt
-			}
-			vd.mu.RUnlock()
-		}
-	}
-
-	if m.replicators.Len() > 0 {
-		snap.Replicators = make(map[string]*replicatorSnapshot, m.replicators.Len())
-
-		for arn, rd := range m.replicators.All() {
-			rd.mu.RLock()
-			snap.Replicators[arn] = &replicatorSnapshot{Replicator: rd.replicator, Version: rd.version}
-			rd.mu.RUnlock()
-		}
-	}
+	snap.Configs = m.configsForSnapshot()
+	snap.VPCConns, snap.VPCConnReadyAt = m.vpcConnsForSnapshot()
+	snap.Replicators = m.replicatorsForSnapshot()
 
 	return json.Marshal(snap)
+}
+
+// clustersForSnapshot deep-copies every cluster record, or returns nil when
+// there are none.
+func (m *Mock) clustersForSnapshot() map[string]*clusterSnapshot {
+	if m.clusters.Len() == 0 {
+		return nil
+	}
+
+	out := make(map[string]*clusterSnapshot, m.clusters.Len())
+
+	for arn, cd := range m.clusters.All() {
+		cd.mu.RLock()
+		out[arn] = cd.snapshotLocked()
+		cd.mu.RUnlock()
+	}
+
+	return out
+}
+
+// snapshotLocked deep-copies a cluster record. The caller holds cd.mu.
+func (cd *clusterData) snapshotLocked() *clusterSnapshot {
+	cs := &clusterSnapshot{
+		Cluster:      snapshotCluster(cd.cluster),
+		ScramSecrets: copyStrings(cd.scramSecrets),
+		Policy:       cd.policy, PolicyVersion: cd.policyVersion,
+		ReadyAt: cd.readyAt, DeleteAt: cd.deleteAt, MetricsSampleAt: cd.metricsSampleAt,
+	}
+
+	if cd.operations != nil {
+		cs.Operations = make([]driver.ClusterOperation, len(cd.operations))
+		for i := range cd.operations {
+			cs.Operations[i] = copyOperation(cd.operations[i])
+		}
+	}
+
+	if cd.topics != nil {
+		cs.Topics = make(map[string]driver.Topic, len(cd.topics))
+		for name, t := range cd.topics {
+			cs.Topics[name] = snapshotTopic(t)
+		}
+	}
+
+	return cs
+}
+
+// configsForSnapshot deep-copies every configuration, or returns nil when there
+// are none.
+func (m *Mock) configsForSnapshot() map[string]driver.Configuration {
+	if m.configs.Len() == 0 {
+		return nil
+	}
+
+	out := make(map[string]driver.Configuration, m.configs.Len())
+
+	for arn, cd := range m.configs.All() {
+		cd.mu.RLock()
+		out[arn] = snapshotConfig(cd.config)
+		cd.mu.RUnlock()
+	}
+
+	return out
+}
+
+// vpcConnsForSnapshot deep-copies every VPC connection, plus the CREATING
+// deadline of each one still inside its window (nil when none is).
+func (m *Mock) vpcConnsForSnapshot() (conns map[string]driver.VpcConnection, readyAt map[string]time.Time) {
+	if m.vpcConns.Len() == 0 {
+		return nil, nil
+	}
+
+	conns = make(map[string]driver.VpcConnection, m.vpcConns.Len())
+
+	for arn, vd := range m.vpcConns.All() {
+		vd.mu.RLock()
+		conns[arn] = snapshotVpcConnection(vd.vpc)
+
+		if !vd.readyAt.IsZero() {
+			if readyAt == nil {
+				readyAt = map[string]time.Time{}
+			}
+
+			readyAt[arn] = vd.readyAt
+		}
+		vd.mu.RUnlock()
+	}
+
+	return conns, readyAt
+}
+
+// replicatorsForSnapshot deep-copies every replicator, or returns nil when
+// there are none.
+func (m *Mock) replicatorsForSnapshot() map[string]*replicatorSnapshot {
+	if m.replicators.Len() == 0 {
+		return nil
+	}
+
+	out := make(map[string]*replicatorSnapshot, m.replicators.Len())
+
+	for arn, rd := range m.replicators.All() {
+		rd.mu.RLock()
+		out[arn] = &replicatorSnapshot{Replicator: snapshotReplicator(rd.replicator), Version: rd.version}
+		rd.mu.RUnlock()
+	}
+
+	return out
 }
 
 // Restore rebuilds the mock's state under the original identities: every cluster,

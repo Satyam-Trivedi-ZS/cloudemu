@@ -32,57 +32,61 @@ func (m *Mock) managedKafkaKeyARN() string {
 }
 
 // withDefaultEncryption returns raw with the cluster's EncryptionInfo completed
-// the way real MSK completes it: with no encryptionInfo, at-rest encryption
-// under the AWS managed key plus the documented in-transit defaults (ClientBroker
-// TLS, InCluster true); with an encryptionInfo that omits encryptionAtRest (or
-// its key), the managed key is filled in and the rest is kept verbatim. A block
-// that already names a key is left untouched. raw is not mutated.
+// the way real MSK completes it. Every field the request leaves out gets its
+// documented default: encryptionAtRest.dataVolumeKMSKeyId the AWS managed key,
+// encryptionInTransit.clientBroker TLS and encryptionInTransit.inCluster true
+// (https://docs.aws.amazon.com/msk/1.0/apireference/clusters.html#clusters-model-encryptionintransit).
+// Fields the request sets, including inCluster false, are kept, as is any other
+// content of the block. A block that is not a JSON object is left as sent. raw
+// is not mutated.
 func (m *Mock) withDefaultEncryption(raw map[string]json.RawMessage) map[string]json.RawMessage {
 	out := copyRaw(raw)
 	if out == nil {
 		out = map[string]json.RawMessage{}
 	}
 
-	keyARN := m.managedKafkaKeyARN()
-
-	blk, ok := out[encryptionInfoKey]
-	if !ok || len(blk) == 0 {
-		out[encryptionInfoKey] = mustJSON(map[string]any{
-			"encryptionAtRest":    map[string]any{"dataVolumeKMSKeyId": keyARN},
-			"encryptionInTransit": map[string]any{"clientBroker": "TLS", "inCluster": true},
-		})
-
-		return out
-	}
-
 	var info map[string]json.RawMessage
-	if err := json.Unmarshal(blk, &info); err != nil || info == nil {
-		return out
+	if blk := out[encryptionInfoKey]; len(blk) > 0 {
+		if err := json.Unmarshal(blk, &info); err != nil {
+			return out
+		}
 	}
 
-	var atRest map[string]json.RawMessage
-	if r, has := info["encryptionAtRest"]; has {
-		_ = json.Unmarshal(r, &atRest)
+	if info == nil {
+		info = map[string]json.RawMessage{}
 	}
 
-	if atRest == nil {
-		atRest = map[string]json.RawMessage{}
-	}
+	changed := defaultField(info, "encryptionAtRest", "dataVolumeKMSKeyId", m.managedKafkaKeyARN())
+	changed = defaultField(info, "encryptionInTransit", "clientBroker", "TLS") || changed
+	changed = defaultField(info, "encryptionInTransit", "inCluster", true) || changed
 
-	var existing string
-	if k, has := atRest["dataVolumeKMSKeyId"]; has {
-		_ = json.Unmarshal(k, &existing)
+	if changed {
+		out[encryptionInfoKey] = mustJSON(info)
 	}
-
-	if existing != "" {
-		return out
-	}
-
-	atRest["dataVolumeKMSKeyId"] = mustJSON(keyARN)
-	info["encryptionAtRest"] = mustJSON(atRest)
-	out[encryptionInfoKey] = mustJSON(info)
 
 	return out
+}
+
+// defaultField sets info[block][field] to val when the field is absent, null or
+// an empty string, creating the block if needed, and reports whether it did.
+func defaultField(info map[string]json.RawMessage, block, field string, val any) bool {
+	var blk map[string]json.RawMessage
+	if r, ok := info[block]; ok {
+		_ = json.Unmarshal(r, &blk)
+	}
+
+	if blk == nil {
+		blk = map[string]json.RawMessage{}
+	}
+
+	if v, ok := blk[field]; ok && string(v) != "null" && string(v) != `""` {
+		return false
+	}
+
+	blk[field] = mustJSON(val)
+	info[block] = mustJSON(blk)
+
+	return true
 }
 
 // mustJSON marshals a value built from JSON-safe types (maps, strings, bools,

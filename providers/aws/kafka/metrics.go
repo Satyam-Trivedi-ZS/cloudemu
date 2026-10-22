@@ -55,18 +55,19 @@ func (m *Mock) SetMonitoring(mon mondriver.Monitoring) {
 	m.monitoring = mon
 }
 
-// Tick publishes the AWS/Kafka metrics that are due at now for every ACTIVE
-// provisioned cluster, and reports whether it published anything. It has the
-// config.Tickable signature of the shared serve scheduler; library mode never
-// calls it, so tests drive it with a FakeClock. Each cluster is sampled under
-// its own lock and everything is published after all locks are released.
+// Tick is the MSK work of the shared serve scheduler (config.Tickable). At now
+// it removes every cluster whose DELETING window has ended, so a finished
+// delete is dropped (and persisted) even when nothing reads the cluster, and
+// publishes the AWS/Kafka metrics that are due for every ACTIVE provisioned
+// cluster. It reports whether it removed or published anything. Every state
+// check uses now, not the options clock. Library mode never calls it, so tests
+// drive it with a FakeClock. Each cluster is sampled under its own lock and
+// everything is published after all locks are released.
 func (m *Mock) Tick(now time.Time) bool {
-	if m.monitoring == nil {
-		return false
-	}
-
 	arns := m.clusters.Keys()
 	sort.Strings(arns)
+
+	reaped := false
 
 	var data []mondriver.MetricDatum
 
@@ -76,27 +77,33 @@ func (m *Mock) Tick(now time.Time) bool {
 			continue
 		}
 
-		data = append(data, m.dueMetrics(cd, now)...)
+		if m.reapIfGoneAt(arn, cd, now) {
+			reaped = true
+
+			continue
+		}
+
+		if m.monitoring != nil {
+			data = append(data, m.dueMetrics(cd, now)...)
+		}
 	}
 
-	if len(data) == 0 {
-		return false
+	if len(data) > 0 {
+		_ = m.monitoring.PutMetricData(context.Background(), data)
 	}
 
-	_ = m.monitoring.PutMetricData(context.Background(), data)
-
-	return true
+	return reaped || len(data) > 0
 }
 
 // dueMetrics samples cd's metrics if they are due at now and records the sample
 // time. A cluster that is not ACTIVE, or is serverless, reports nothing.
 // Callers must not hold cd.mu.
-func (m *Mock) dueMetrics(cd *clusterData, now time.Time) []mondriver.MetricDatum {
+func (*Mock) dueMetrics(cd *clusterData, now time.Time) []mondriver.MetricDatum {
 	cd.mu.Lock()
 	defer cd.mu.Unlock()
 
 	if cd.cluster.ClusterType != driver.ClusterTypeProvisioned ||
-		m.clusterStateLocked(cd) != driver.ClusterStateActive {
+		clusterStateAt(cd, now) != driver.ClusterStateActive {
 		return nil
 	}
 

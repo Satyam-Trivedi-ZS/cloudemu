@@ -378,6 +378,14 @@ func TestTickSkipsDeletingAndServerless(t *testing.T) {
 
 	fc.Advance(settleWindow)
 
+	// This tick removes the cluster whose DELETING window has ended (a change);
+	// the next one, with only the serverless cluster left, does nothing.
+	if !m.Tick(fc.Now()) {
+		t.Fatal("Tick did not report removing the deleted cluster")
+	}
+
+	fc.Advance(time.Minute)
+
 	if m.Tick(fc.Now()) {
 		t.Fatal("Tick published for a serverless cluster")
 	}
