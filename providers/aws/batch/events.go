@@ -217,7 +217,9 @@ func eventDetail(j *driver.Job, status string) jobStateChangeDetail {
 
 	if status != j.Status {
 		// An intermediate status replayed after the fact: report only what was
-		// true then.
+		// true then. The container hadn't exited yet, so it has no exitCode.
+		d.Container = withoutExitCode(j.Container)
+
 		return d
 	}
 

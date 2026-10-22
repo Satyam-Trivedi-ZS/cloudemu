@@ -84,10 +84,15 @@ const (
 	DefaultRestoreStandardSettle  = 3 * time.Second
 	DefaultRestoreBulkSettle      = 5 * time.Second
 
-	// DefaultBatchJobPhase is how long an AWS Batch job dwells in each
-	// non-terminal phase (SUBMITTED, RUNNABLE, STARTING, RUNNING) before moving
-	// on, so a dependency-free job reaches SUCCEEDED 4 phases after submission.
+	// DefaultBatchJobPhase is how long an AWS Batch job dwells in SUBMITTED,
+	// RUNNABLE and STARTING before moving on; RUNNING lasts
+	// DefaultBatchJobRunDwell.
 	DefaultBatchJobPhase = 1 * time.Second
+
+	// DefaultBatchJobRunDwell is how long an AWS Batch job stays RUNNING. It is
+	// longer than the other phases so a real CLI or SDK client can observe a
+	// running job and call TerminateJob on it before it finishes.
+	DefaultBatchJobRunDwell = 5 * time.Second
 )
 
 // Window is a read-time overlay describing a resource still settling into its

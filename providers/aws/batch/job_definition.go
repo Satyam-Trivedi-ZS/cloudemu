@@ -28,7 +28,10 @@ func cloneJobDefinition(jd driver.JobDefinition) driver.JobDefinition {
 
 // RegisterJobDefinition registers a new revision. A repeated name yields the
 // next revision (N+1) with a new ARN; prior revisions remain ACTIVE until
-// deregistered. platformCapabilities defaults to [EC2].
+// deregistered. platformCapabilities is stored as sent: real Batch treats an
+// empty list as EC2 but doesn't echo a default, so DescribeJobDefinitions
+// returns none (Terraform's acceptance tests assert platform_capabilities.# = 0
+// for container and multinode definitions registered without it).
 //
 //nolint:gocritic // in is the driver RegisterJobDefinitionInput, taken by value to match the interface
 func (m *Mock) RegisterJobDefinition(
@@ -44,11 +47,6 @@ func (m *Mock) RegisterJobDefinition(
 
 	if err := validateJobDefinitionType(&in); err != nil {
 		return nil, err
-	}
-
-	caps := in.PlatformCapabilities
-	if len(caps) == 0 {
-		caps = []string{"EC2"}
 	}
 
 	m.registerMu.Lock()
@@ -69,7 +67,7 @@ func (m *Mock) RegisterJobDefinition(
 		RetryStrategy:        copyRaw(in.RetryStrategy),
 		Timeout:              copyRaw(in.Timeout),
 		Parameters:           copyTags(in.Parameters),
-		PlatformCapabilities: copyStrings(caps),
+		PlatformCapabilities: copyStrings(in.PlatformCapabilities),
 		PropagateTags:        copyBool(in.PropagateTags),
 		SchedulingPriority:   copyInt32(in.SchedulingPriority),
 		Tags:                 copyTags(in.Tags),

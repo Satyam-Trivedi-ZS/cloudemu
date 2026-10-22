@@ -9,6 +9,7 @@ import (
 
 	"github.com/stackshy/cloudemu/v2/config"
 	"github.com/stackshy/cloudemu/v2/errors"
+	"github.com/stackshy/cloudemu/v2/internal/settle"
 	"github.com/stackshy/cloudemu/v2/providers/aws/batch"
 	"github.com/stackshy/cloudemu/v2/services/batch/driver"
 )
@@ -165,26 +166,38 @@ func TestJobLifecycleAdvancesWithClock(t *testing.T) {
 
 	j := submit(t, m, driver.SubmitJobInput{})
 
-	want := []string{
-		driver.JobStatusSubmitted, driver.JobStatusRunnable, driver.JobStatusStarting,
-		driver.JobStatusRunning, driver.JobStatusSucceeded,
+	// One second each in SUBMITTED, RUNNABLE and STARTING; RUNNING lasts the
+	// longer run dwell, so a real client has time to terminate a running job.
+	steps := []struct {
+		status string
+		dwell  time.Duration
+	}{
+		{driver.JobStatusSubmitted, time.Second},
+		{driver.JobStatusRunnable, time.Second},
+		{driver.JobStatusStarting, time.Second},
+		{driver.JobStatusRunning, time.Second},
+		{driver.JobStatusRunning, settle.DefaultBatchJobRunDwell - 2*time.Second},
+		{driver.JobStatusRunning, time.Second},
+		{driver.JobStatusSucceeded, 0},
 	}
 
-	for i, w := range want {
+	for i, st := range steps {
 		got := describe(t, m, j.JobID)
-		if got.Status != w {
-			t.Fatalf("step %d: status = %s, want %s", i, got.Status, w)
+		if got.Status != st.status {
+			t.Fatalf("step %d: status = %s, want %s", i, got.Status, st.status)
 		}
 
-		if w == driver.JobStatusRunning && got.StartedAt == 0 {
+		if st.status == driver.JobStatusRunning && got.StartedAt == 0 {
 			t.Fatal("RUNNING job has no startedAt")
 		}
 
-		if w == driver.JobStatusSucceeded && (got.StoppedAt <= got.StartedAt || got.StatusReason == "") {
-			t.Fatalf("SUCCEEDED job times/reason wrong: %+v", got)
+		if st.status == driver.JobStatusSucceeded {
+			if got.StoppedAt-got.StartedAt != settle.DefaultBatchJobRunDwell.Milliseconds() || got.StatusReason == "" {
+				t.Fatalf("SUCCEEDED job times/reason wrong: %+v", got)
+			}
 		}
 
-		fc.Advance(time.Second)
+		fc.Advance(st.dwell)
 	}
 }
 
@@ -268,15 +281,15 @@ func TestDependentJobWaitsAndFailsWithDependency(t *testing.T) {
 		t.Fatalf("child before parent finishes = %s, want PENDING", got)
 	}
 
-	// Parent finishes at +4s; child then runs RUNNABLE/STARTING/RUNNING and
-	// succeeds at +7s.
-	fc.Advance(3 * time.Second)
+	// Parent finishes at +8s (3 one-second phases plus the 5s RUNNING dwell);
+	// child then runs RUNNABLE/STARTING/RUNNING and succeeds at +15s.
+	fc.Advance(7 * time.Second)
 
 	if got := describe(t, m, child.JobID).Status; got != driver.JobStatusRunnable {
 		t.Fatalf("child after parent succeeded = %s, want RUNNABLE", got)
 	}
 
-	fc.Advance(3 * time.Second)
+	fc.Advance(7 * time.Second)
 
 	if got := describe(t, m, child.JobID).Status; got != driver.JobStatusSucceeded {
 		t.Fatalf("child = %s, want SUCCEEDED", got)
@@ -713,10 +726,16 @@ func TestJobsAndPoliciesSurviveSnapshot(t *testing.T) {
 		t.Fatalf("restored job = %+v", got)
 	}
 
-	fc.Advance(5 * time.Second)
+	fc.Advance(7 * time.Second)
 
-	if got := describe(t, dst, j.JobID); got.Status != driver.JobStatusSucceeded {
+	got := describe(t, dst, j.JobID)
+	if got.Status != driver.JobStatusSucceeded {
 		t.Fatalf("restored job did not resume its lifecycle: %s", got.Status)
+	}
+
+	// The RUNNING dwell is part of the restored record.
+	if got.StoppedAt-got.StartedAt != settle.DefaultBatchJobRunDwell.Milliseconds() {
+		t.Fatalf("restored job ran for %dms, want %v", got.StoppedAt-got.StartedAt, settle.DefaultBatchJobRunDwell)
 	}
 
 	if list, _ := dst.ListSchedulingPolicies(ctx); len(list) != 1 {

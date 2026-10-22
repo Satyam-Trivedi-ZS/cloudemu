@@ -19,11 +19,10 @@ const (
 
 // Phase offsets, in units of a job's phase duration, measured from the instant
 // it became ready (dependencies met): RUNNABLE for one phase, STARTING for the
-// next, RUNNING for the third, then SUCCEEDED.
+// next, then RUNNING for the job's run dwell before SUCCEEDED.
 const (
-	phasesToStarting  = 1
-	phasesToRunning   = 2
-	phasesToSucceeded = 3
+	phasesToStarting = 1
+	phasesToRunning  = 2
 )
 
 // jobStop records a CancelJob/TerminateJob that took effect on a job (or one
@@ -42,8 +41,10 @@ type jobStop struct {
 // settle overlay derives other services' transient states: no goroutines or
 // timers, advancing the clock is what moves a job through its lifecycle.
 //
-// Phase is the dwell time in each non-terminal phase; zero (AsyncSettle off)
-// means the job is SUCCEEDED as soon as its dependencies are. Array children
+// Phase is the dwell time in each non-terminal phase except RUNNING, which
+// lasts RunPhase; zero (AsyncSettle off) means the job is SUCCEEDED as soon as
+// its dependencies are. A record restored from a snapshot taken before
+// RunPhase existed has it zero and runs for Phase. Array children
 // are not stored individually: child i's state is derived from the parent
 // record, with ChildStops (keyed by the decimal index) holding any child that
 // was canceled or terminated.
@@ -52,6 +53,7 @@ type jobRecord struct {
 	Seq         int64              `json:"seq"`
 	SubmittedAt time.Time          `json:"submittedAt"`
 	Phase       time.Duration      `json:"phase"`
+	RunPhase    time.Duration      `json:"runPhase,omitempty"`
 	Sequential  bool               `json:"sequential,omitempty"`
 	Stop        *jobStop           `json:"stop,omitempty"`
 	ChildStops  map[string]jobStop `json:"childStops,omitempty"`
@@ -116,6 +118,15 @@ func cloneJob(j driver.Job) driver.Job {
 	j.Tags = copyTags(j.Tags)
 
 	return j
+}
+
+// runDwell is how long the job stays RUNNING.
+func (r *jobRecord) runDwell() time.Duration {
+	if r.RunPhase > 0 {
+		return r.RunPhase
+	}
+
+	return r.Phase
 }
 
 func (r *jobRecord) arraySize() int {
@@ -379,7 +390,7 @@ func (o *observer) natural(rec *jobRecord, idx int, prev *jobView) jobView {
 		return blocked
 	}
 
-	return o.phaseView(ready, rec.Phase)
+	return o.phaseView(ready, rec.Phase, rec.runDwell())
 }
 
 // readiness folds the job's dependencies (and a SEQUENTIAL predecessor) into
@@ -422,10 +433,10 @@ func (o *observer) readiness(rec *jobRecord, idx int, prev *jobView, ready time.
 }
 
 // phaseView places a ready job in its RUNNABLE/STARTING/RUNNING/SUCCEEDED
-// phase given the phase duration d.
-func (o *observer) phaseView(ready time.Time, d time.Duration) jobView {
+// phase given the phase duration d and the RUNNING dwell run.
+func (o *observer) phaseView(ready time.Time, d, run time.Duration) jobView {
 	started := ready.Add(phasesToRunning * d)
-	stopped := ready.Add(phasesToSucceeded * d)
+	stopped := started.Add(run)
 
 	switch {
 	case o.now.Before(ready.Add(phasesToStarting * d)):
@@ -478,6 +489,32 @@ func withExitCode(container json.RawMessage) json.RawMessage {
 	}
 
 	obj["exitCode"] = json.RawMessage("0")
+
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return container
+	}
+
+	return out
+}
+
+// withoutExitCode returns the container detail with any exitCode removed, for
+// an event replaying a status the job held before its container exited.
+func withoutExitCode(container json.RawMessage) json.RawMessage {
+	if !isSet(container) {
+		return container
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(container, &obj); err != nil {
+		return container
+	}
+
+	if _, ok := obj["exitCode"]; !ok {
+		return container
+	}
+
+	delete(obj, "exitCode")
 
 	out, err := json.Marshal(obj)
 	if err != nil {

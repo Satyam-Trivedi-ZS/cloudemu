@@ -250,6 +250,9 @@ func (m *Mock) DeleteSchedulingPolicy(_ context.Context, arn string) error {
 
 	name := nameFromARN(kindSchedulingPolicy, arn)
 
+	m.policyBindMu.Lock()
+	defer m.policyBindMu.Unlock()
+
 	p, ok := m.schedPolicies.Get(name)
 	if !ok {
 		return cerrors.Newf(cerrors.NotFound, "scheduling policy %q does not exist", arn)

@@ -51,6 +51,11 @@ type Mock struct {
 	// RegisterJobDefinition calls for the same name can't claim the same revision.
 	registerMu sync.Mutex
 
+	// policyBindMu serializes binding a scheduling policy to a job queue
+	// (CreateJobQueue, UpdateJobQueue) against DeleteSchedulingPolicy, so a
+	// policy can't be deleted between the in-use check and a queue binding it.
+	policyBindMu sync.Mutex
+
 	// jobsMu serializes job submission (sequence allocation), cancel/terminate
 	// decisions and the event-emission bookkeeping on job records.
 	jobsMu sync.Mutex

@@ -238,3 +238,54 @@ func TestSDKRegisterJobDefinitionInvalidType(t *testing.T) {
 	})
 	requireClientException(t, err, "RegisterJobDefinition multinode without nodeProperties")
 }
+
+// TestSDKSubmitJobEcsPropertiesOverride checks an ECS override round-trips
+// through the wire layer into DescribeJobs instead of being dropped.
+func TestSDKSubmitJobEcsPropertiesOverride(t *testing.T) {
+	ctx := context.Background()
+	c := newBatchClient(t)
+	setupSDKQueue(t, c, nil)
+
+	if _, err := c.RegisterJobDefinition(ctx, &awsbatch.RegisterJobDefinitionInput{
+		JobDefinitionName: aws.String("ecs"),
+		Type:              batchtypes.JobDefinitionTypeContainer,
+		EcsProperties: &batchtypes.EcsProperties{TaskProperties: []batchtypes.EcsTaskProperties{{
+			Containers: []batchtypes.TaskContainerProperties{{Name: aws.String("app"), Image: aws.String("app:1"), Command: []string{"run"}}},
+		}}},
+	}); err != nil {
+		t.Fatalf("RegisterJobDefinition: %v", err)
+	}
+
+	sub, err := c.SubmitJob(ctx, &awsbatch.SubmitJobInput{
+		JobName: aws.String("ecs"), JobQueue: aws.String("q"), JobDefinition: aws.String("ecs"),
+		EcsPropertiesOverride: &batchtypes.EcsPropertiesOverride{TaskProperties: []batchtypes.TaskPropertiesOverride{{
+			Containers: []batchtypes.TaskContainerOverrides{{Name: aws.String("app"), Command: []string{"run", "--fast"}}},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("SubmitJob: %v", err)
+	}
+
+	desc, err := c.DescribeJobs(ctx, &awsbatch.DescribeJobsInput{Jobs: []string{aws.ToString(sub.JobId)}})
+	if err != nil || len(desc.Jobs) != 1 {
+		t.Fatalf("DescribeJobs: %v %v", desc, err)
+	}
+
+	ep := desc.Jobs[0].EcsProperties
+	if ep == nil || len(ep.TaskProperties) != 1 || len(ep.TaskProperties[0].Containers) != 1 {
+		t.Fatalf("ecsProperties missing: %+v", ep)
+	}
+
+	if got := ep.TaskProperties[0].Containers[0].Command; len(got) != 2 || got[1] != "--fast" {
+		t.Fatalf("override not applied: %v", got)
+	}
+
+	// An ECS override on a containerProperties definition is a ClientException.
+	_, err = c.SubmitJob(ctx, &awsbatch.SubmitJobInput{
+		JobName: aws.String("bad"), JobQueue: aws.String("q"), JobDefinition: aws.String("jd"),
+		EcsPropertiesOverride: &batchtypes.EcsPropertiesOverride{TaskProperties: []batchtypes.TaskPropertiesOverride{{
+			Containers: []batchtypes.TaskContainerOverrides{{Command: []string{"x"}}},
+		}}},
+	})
+	requireClientException(t, err, "ecs override on containerProperties definition")
+}

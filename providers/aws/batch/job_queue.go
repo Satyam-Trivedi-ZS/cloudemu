@@ -50,6 +50,9 @@ func (m *Mock) CreateJobQueue(_ context.Context, in driver.CreateJobQueueInput) 
 		return nil, err
 	}
 
+	m.policyBindMu.Lock()
+	defer m.policyBindMu.Unlock()
+
 	policyARN := ""
 
 	if in.SchedulingPolicyARN != "" {
@@ -102,6 +105,11 @@ func (m *Mock) UpdateJobQueue(_ context.Context, in driver.UpdateJobQueueInput) 
 			return nil, err
 		}
 	}
+
+	// Held across the read, the policy resolution and the write, so the policy
+	// can't be deleted (and no other update can land) in between.
+	m.policyBindMu.Lock()
+	defer m.policyBindMu.Unlock()
 
 	cur, ok := m.jobQueues.Get(name)
 	if !ok {

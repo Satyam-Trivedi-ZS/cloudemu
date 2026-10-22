@@ -83,6 +83,7 @@ func (m *Mock) SubmitJob(ctx context.Context, in driver.SubmitJobInput) (*driver
 		Seq:         seq,
 		SubmittedAt: now,
 		Phase:       m.opts.SettleDuration(settle.DefaultBatchJobPhase),
+		RunPhase:    m.opts.SettleDuration(settle.DefaultBatchJobRunDwell),
 		Sequential:  hasSequential(in.DependsOn),
 		LastEmitted: driver.JobStatusSubmitted,
 	}
@@ -260,7 +261,8 @@ func validateShare(q *driver.JobQueue, in *driver.SubmitJobInput) error {
 }
 
 // resolveJobDefinition resolves name, name:revision, or an ARN with or without
-// a revision. Without a revision the latest ACTIVE revision is used.
+// a revision. Without a revision the latest ACTIVE revision is used; an
+// explicit revision must be ACTIVE.
 func (m *Mock) resolveJobDefinition(ref string) (driver.JobDefinition, error) {
 	key := nameFromARN(kindJobDefinition, ref)
 
@@ -268,6 +270,13 @@ func (m *Mock) resolveJobDefinition(ref string) (driver.JobDefinition, error) {
 		jd, ok := m.jobDefs.Get(key)
 		if !ok {
 			return driver.JobDefinition{}, cerrors.Newf(cerrors.InvalidArgument, "job definition %q does not exist", ref)
+		}
+
+		// A deregistered revision can't be submitted to, even by explicit
+		// revision.
+		if jd.Status != driver.JDStatusActive {
+			return driver.JobDefinition{}, cerrors.Newf(cerrors.InvalidArgument,
+				"job definition %q is %s and can't be used to submit jobs", ref, jd.Status)
 		}
 
 		return jd, nil
@@ -301,6 +310,11 @@ func (m *Mock) buildJob(in *driver.SubmitJobInput, q *driver.JobQueue, jd *drive
 		return driver.Job{}, err
 	}
 
+	props, err := applyPropertyOverrides(in, jd)
+	if err != nil {
+		return driver.Job{}, err
+	}
+
 	id := idgen.UUID()
 
 	job := driver.Job{
@@ -312,9 +326,9 @@ func (m *Mock) buildJob(in *driver.SubmitJobInput, q *driver.JobQueue, jd *drive
 		DependsOn:            cloneDeps(in.DependsOn),
 		Parameters:           mergeParams(jd.Parameters, in.Parameters),
 		Container:            container,
-		NodeProperties:       copyRaw(jd.NodeProperties),
-		EcsProperties:        copyRaw(jd.EcsProperties),
-		EksProperties:        copyRaw(jd.EksProperties),
+		NodeProperties:       props.node,
+		EcsProperties:        props.ecs,
+		EksProperties:        props.eks,
 		RetryStrategy:        firstSet(in.RetryStrategy, jd.RetryStrategy),
 		Timeout:              firstSet(in.Timeout, jd.Timeout),
 		PlatformCapabilities: copyStrings(jd.PlatformCapabilities),
@@ -629,7 +643,7 @@ func (l *jobLister) queue(m *Mock) *driver.ListJobsOutput {
 }
 
 // children lists an array job's children by index, resuming after the cursor
-// index.
+// index. Filters apply to children the same way they apply to a queue listing.
 func (l *jobLister) children(m *Mock) *driver.ListJobsOutput {
 	out := &driver.ListJobsOutput{Jobs: []driver.Job{}}
 
@@ -640,7 +654,7 @@ func (l *jobLister) children(m *Mock) *driver.ListJobsOutput {
 
 	for i := int(l.after + 1); i < rec.arraySize(); i++ {
 		j := l.o.render(&rec, i)
-		if l.useStatus && j.Status != l.status {
+		if (l.useStatus && j.Status != l.status) || !matchesFilters(&j, l.in.Filters) {
 			continue
 		}
 
