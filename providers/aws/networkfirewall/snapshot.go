@@ -188,6 +188,7 @@ func (m *Mock) restoreStores(snap *networkfirewallSnapshot) error {
 func (m *Mock) backfillRestoredState() {
 	for _, f := range m.firewalls.SortedValues() {
 		ensureToken(&f.UpdateToken)
+		m.backfillSubnets(f)
 	}
 
 	for _, p := range m.policies.SortedValues() {
@@ -215,5 +216,15 @@ func ensureToken(token *string) {
 func ensureActive(status *string) {
 	if *status == "" {
 		*status = statusActive
+	}
+}
+
+// backfillSubnets gives a restored firewall the per-subnet zones and endpoints
+// state saved before this release does not carry.
+func (m *Mock) backfillSubnets(f *nfdriver.Firewall) {
+	for _, s := range f.SubnetIDs {
+		if _, ok := f.SubnetDetails[s]; !ok {
+			_ = m.assignSubnet(f, s, "")
+		}
 	}
 }

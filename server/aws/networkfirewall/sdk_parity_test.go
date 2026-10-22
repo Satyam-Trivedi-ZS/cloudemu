@@ -461,7 +461,7 @@ func TestSDK_Metadata_Ops(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, s.policyARN, aws.ToString(fm.FirewallPolicyArn))
 	assert.Equal(t, nftypes.FirewallStatusValueReady, fm.Status)
-	assert.Contains(t, fm.SupportedAvailabilityZones, "us-east-1a")
+	assert.Contains(t, fm.SupportedAvailabilityZones, "us-east-1c")
 
 	rm, err := s.c.DescribeRuleGroupMetadata(bg, &networkfirewall.DescribeRuleGroupMetadataInput{RuleGroupArn: rg.RuleGroupResponse.RuleGroupArn})
 	require.NoError(t, err)
@@ -483,29 +483,29 @@ func TestSDK_FlowAndAnalysis_Ops(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	capture, err := s.c.StartFlowCapture(bg, &networkfirewall.StartFlowCaptureInput{FirewallArn: aws.String(s.fwARN), AvailabilityZone: aws.String("us-east-1a"), FlowFilters: []nftypes.FlowFilter{{SourcePort: aws.String("80")}}})
+	capture, err := s.c.StartFlowCapture(bg, &networkfirewall.StartFlowCaptureInput{FirewallArn: aws.String(s.fwARN), AvailabilityZone: aws.String("us-east-1c"), FlowFilters: []nftypes.FlowFilter{{SourcePort: aws.String("80")}}})
 	require.NoError(t, err)
 	assert.Equal(t, nftypes.FlowOperationStatusCompleted, capture.FlowOperationStatus)
 
-	flush, err := s.c.StartFlowFlush(bg, &networkfirewall.StartFlowFlushInput{FirewallArn: aws.String(s.fwARN), AvailabilityZone: aws.String("us-east-1a"), FlowFilters: []nftypes.FlowFilter{{SourcePort: aws.String("80")}}})
+	flush, err := s.c.StartFlowFlush(bg, &networkfirewall.StartFlowFlushInput{FirewallArn: aws.String(s.fwARN), AvailabilityZone: aws.String("us-east-1c"), FlowFilters: []nftypes.FlowFilter{{SourcePort: aws.String("80")}}})
 	require.NoError(t, err)
 
 	d, err := s.c.DescribeFlowOperation(bg, &networkfirewall.DescribeFlowOperationInput{
-		FirewallArn: aws.String(s.fwARN), AvailabilityZone: aws.String("us-east-1a"), FlowOperationId: capture.FlowOperationId,
+		FirewallArn: aws.String(s.fwARN), AvailabilityZone: aws.String("us-east-1c"), FlowOperationId: capture.FlowOperationId,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, nftypes.FlowOperationTypeFlowCapture, d.FlowOperationType)
 	assert.NotNil(t, d.FlowRequestTimestamp)
 
 	ops, err := s.c.ListFlowOperations(bg, &networkfirewall.ListFlowOperationsInput{
-		FirewallArn: aws.String(s.fwARN), AvailabilityZone: aws.String("us-east-1a"), FlowOperationType: nftypes.FlowOperationTypeFlowFlush,
+		FirewallArn: aws.String(s.fwARN), AvailabilityZone: aws.String("us-east-1c"), FlowOperationType: nftypes.FlowOperationTypeFlowFlush,
 	})
 	require.NoError(t, err)
 	require.Len(t, ops.FlowOperations, 1)
 	assert.Equal(t, aws.ToString(flush.FlowOperationId), aws.ToString(ops.FlowOperations[0].FlowOperationId))
 
 	res, err := s.c.ListFlowOperationResults(bg, &networkfirewall.ListFlowOperationResultsInput{
-		FirewallArn: aws.String(s.fwARN), AvailabilityZone: aws.String("us-east-1a"), FlowOperationId: capture.FlowOperationId,
+		FirewallArn: aws.String(s.fwARN), AvailabilityZone: aws.String("us-east-1c"), FlowOperationId: capture.FlowOperationId,
 	})
 	require.NoError(t, err)
 	assert.Empty(t, res.Flows, "no data plane, no flows")
@@ -705,4 +705,112 @@ func TestSDK_DescribeByARN_And_Deletes(t *testing.T) {
 
 	_, err = s.c.CreateRuleGroup(bg, &networkfirewall.CreateRuleGroupInput{RuleGroupName: aws.String("dup"), Type: nftypes.RuleGroupTypeStateful, Capacity: aws.Int32(1)})
 	require.ErrorAs(t, err, &invalid, "a duplicate name is InvalidRequestException")
+}
+
+func TestSDK_SubnetMapping_IPAddressType_Echoed(t *testing.T) {
+	s := newStack(t)
+
+	created, err := s.c.CreateFirewall(bg, &networkfirewall.CreateFirewallInput{
+		FirewallName: aws.String("fw-ip"), FirewallPolicyArn: aws.String(s.policyARN), VpcId: aws.String("vpc-1a"),
+		SubnetMappings: []nftypes.SubnetMapping{{SubnetId: aws.String("subnet-9"), IPAddressType: nftypes.IPAddressTypeIpv4}},
+	})
+	require.NoError(t, err)
+	require.Len(t, created.Firewall.SubnetMappings, 1)
+	assert.Equal(t, nftypes.IPAddressTypeIpv4, created.Firewall.SubnetMappings[0].IPAddressType)
+
+	assoc, err := s.c.AssociateSubnets(bg, &networkfirewall.AssociateSubnetsInput{
+		FirewallName:   aws.String("fw-ip"),
+		SubnetMappings: []nftypes.SubnetMapping{{SubnetId: aws.String("subnet-8"), IPAddressType: nftypes.IPAddressTypeDualstack}},
+	})
+	require.NoError(t, err)
+
+	got := map[string]nftypes.IPAddressType{}
+	for _, m := range assoc.SubnetMappings {
+		got[aws.ToString(m.SubnetId)] = m.IPAddressType
+	}
+
+	assert.Equal(t, nftypes.IPAddressTypeIpv4, got["subnet-9"])
+	assert.Equal(t, nftypes.IPAddressTypeDualstack, got["subnet-8"])
+
+	d, err := s.c.DescribeFirewall(bg, &networkfirewall.DescribeFirewallInput{FirewallName: aws.String("fw-ip")})
+	require.NoError(t, err)
+	assert.Len(t, d.Firewall.SubnetMappings, 2)
+}
+
+func TestSDK_SyncStates_ZoneIsStable_FlowCaptureAcceptsIt(t *testing.T) {
+	s := newStack(t)
+
+	_, err := s.c.CreateFirewall(bg, &networkfirewall.CreateFirewallInput{
+		FirewallName: aws.String("fw-z"), FirewallPolicyArn: aws.String(s.policyARN), VpcId: aws.String("vpc-1a"),
+		SubnetMappings: []nftypes.SubnetMapping{{SubnetId: aws.String("subnet-a")}, {SubnetId: aws.String("subnet-b")}},
+	})
+	require.NoError(t, err)
+
+	zoneOf := func(subnet string) (string, string) {
+		d, derr := s.c.DescribeFirewall(bg, &networkfirewall.DescribeFirewallInput{FirewallName: aws.String("fw-z")})
+		require.NoError(t, derr)
+
+		for az, st := range d.FirewallStatus.SyncStates {
+			if aws.ToString(st.Attachment.SubnetId) == subnet {
+				return az, aws.ToString(st.Attachment.EndpointId)
+			}
+		}
+
+		return "", ""
+	}
+
+	azA, epA := zoneOf("subnet-a")
+	azB, epB := zoneOf("subnet-b")
+	require.NotEmpty(t, azA)
+	require.NotEmpty(t, azB)
+	assert.NotEqual(t, azA, azB)
+	assert.NotEqual(t, epA, epB, "each zone has its own endpoint")
+
+	_, err = s.c.DisassociateSubnets(bg, &networkfirewall.DisassociateSubnetsInput{
+		FirewallName: aws.String("fw-z"), SubnetIds: []string{"subnet-a"},
+	})
+	require.NoError(t, err)
+
+	azB2, epB2 := zoneOf("subnet-b")
+	assert.Equal(t, azB, azB2, "the remaining subnet keeps its zone")
+	assert.Equal(t, epB, epB2)
+
+	_, err = s.c.StartFlowCapture(bg, &networkfirewall.StartFlowCaptureInput{
+		FirewallArn: aws.String(arnOfFirewall(t, s, "fw-z")), AvailabilityZone: aws.String(azB),
+		FlowFilters: []nftypes.FlowFilter{{SourcePort: aws.String("80")}},
+	})
+	require.NoError(t, err)
+}
+
+func arnOfFirewall(t *testing.T, s *stack, name string) string {
+	t.Helper()
+
+	d, err := s.c.DescribeFirewall(bg, &networkfirewall.DescribeFirewallInput{FirewallName: aws.String(name)})
+	require.NoError(t, err)
+
+	return aws.ToString(d.Firewall.FirewallArn)
+}
+
+func TestSDK_RuleGroup_DomainNameClash_And_MissingType(t *testing.T) {
+	s := newStack(t)
+
+	_, err := s.c.CreateRuleGroup(bg, &networkfirewall.CreateRuleGroupInput{
+		RuleGroupName: aws.String("dup"), Type: nftypes.RuleGroupTypeStateful, Capacity: aws.Int32(10),
+	})
+	require.NoError(t, err)
+
+	_, err = s.c.CreateRuleGroup(bg, &networkfirewall.CreateRuleGroupInput{
+		RuleGroupName: aws.String("dup"), Type: nftypes.RuleGroupTypeStatefulDomain, Capacity: aws.Int32(10),
+	})
+
+	var invalid *nftypes.InvalidRequestException
+	require.ErrorAs(t, err, &invalid)
+
+	_, err = s.c.CreateRuleGroup(bg, &networkfirewall.CreateRuleGroupInput{
+		RuleGroupName: aws.String("dup"), Type: nftypes.RuleGroupTypeStateless, Capacity: aws.Int32(10),
+	})
+	require.NoError(t, err)
+
+	_, err = s.c.DescribeRuleGroup(bg, &networkfirewall.DescribeRuleGroupInput{RuleGroupName: aws.String("dup")})
+	require.ErrorAs(t, err, &invalid)
 }

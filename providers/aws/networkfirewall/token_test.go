@@ -198,7 +198,7 @@ func TestChangeProtection_BlocksSubnetAssociateDisassociate(t *testing.T) {
 	_, err := m.UpdateSubnetChangeProtection(bg, "fw-1", true, "")
 	require.NoError(t, err)
 
-	_, err = m.AssociateSubnets(bg, "fw-1", []string{"subnet-2"}, "")
+	_, err = m.AssociateSubnets(bg, "fw-1", []nfdriver.SubnetMapping{{SubnetID: "subnet-2"}}, "")
 	requireException(t, err, nfdriver.ExInvalidOperation)
 
 	_, err = m.DisassociateSubnets(bg, "fw-1", []string{"subnet-1"}, "")
@@ -207,7 +207,7 @@ func TestChangeProtection_BlocksSubnetAssociateDisassociate(t *testing.T) {
 	_, err = m.UpdateSubnetChangeProtection(bg, "fw-1", false, "")
 	require.NoError(t, err)
 
-	_, err = m.AssociateSubnets(bg, "fw-1", []string{"subnet-2"}, "")
+	_, err = m.AssociateSubnets(bg, "fw-1", []nfdriver.SubnetMapping{{SubnetID: "subnet-2"}}, "")
 	require.NoError(t, err)
 }
 
@@ -285,7 +285,7 @@ func TestAvailabilityZones_OnVPCFirewall_Unsupported(t *testing.T) {
 	_, err := m.AssociateAvailabilityZones(bg, vpc.Name, []string{"us-east-1b"}, "")
 	requireException(t, err, nfdriver.ExInvalidOperation)
 
-	_, err = m.AssociateSubnets(bg, tgw.Name, []string{"subnet-1"}, "")
+	_, err = m.AssociateSubnets(bg, tgw.Name, []nfdriver.SubnetMapping{{SubnetID: "subnet-1"}}, "")
 	requireException(t, err, nfdriver.ExInvalidOperation)
 }
 

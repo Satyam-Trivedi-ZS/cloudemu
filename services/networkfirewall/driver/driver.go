@@ -22,6 +22,7 @@ type Firewall struct {
 	PolicyARN                        string
 	VPCID                            string
 	SubnetIDs                        []string
+	SubnetDetails                    map[string]SubnetDetail
 	AvailabilityZones                []string
 	TransitGatewayID                 string
 	Description                      string
@@ -36,12 +37,31 @@ type Firewall struct {
 	Tags                             map[string]string
 }
 
-// CreateFirewallConfig is the input to CreateFirewall.
+// SubnetMapping names a subnet to attach a firewall to, with the optional IP
+// address type AWS lets a caller pick per subnet.
+type SubnetMapping struct {
+	SubnetID      string
+	IPAddressType string
+}
+
+// SubnetDetail is what the firewall records for each attached subnet: its IP
+// address type, the Availability Zone it sits in and that zone's endpoint id.
+// The zone and endpoint are assigned when the subnet is attached and never move
+// while it stays attached.
+type SubnetDetail struct {
+	IPAddressType    string
+	AvailabilityZone string
+	EndpointID       string
+}
+
+// CreateFirewallConfig is the input to CreateFirewall. SubnetIPTypes optionally
+// maps a subnet id in SubnetIDs to its IP address type.
 type CreateFirewallConfig struct {
 	Name                             string
 	PolicyARN                        string
 	VPCID                            string
 	SubnetIDs                        []string
+	SubnetIPTypes                    map[string]string
 	AvailabilityZones                []string
 	TransitGatewayID                 string
 	Description                      string
@@ -233,7 +253,7 @@ type NetworkFirewall interface {
 	ListRuleGroups(ctx context.Context, filter RuleGroupFilter, opts ListOptions) ([]RuleGroup, string, error)
 
 	AssociateFirewallPolicy(ctx context.Context, firewallName, policyARN, updateToken string) (*Firewall, error)
-	AssociateSubnets(ctx context.Context, firewallName string, subnetIDs []string, updateToken string) (*Firewall, error)
+	AssociateSubnets(ctx context.Context, firewallName string, subnets []SubnetMapping, updateToken string) (*Firewall, error)
 	DisassociateSubnets(ctx context.Context, firewallName string, subnetIDs []string, updateToken string) (*Firewall, error)
 	UpdateFirewallDeleteProtection(ctx context.Context, firewallName string, enabled bool, updateToken string) (*Firewall, error)
 	UpdateLoggingConfiguration(ctx context.Context, firewallName string, cfg *LoggingConfiguration) error

@@ -27,8 +27,8 @@ func (m *Mock) CreateVpcEndpointAssociation(
 		return nil, invalid("SubnetMapping.SubnetId is required")
 	}
 
-	if cfg.IPAddressType != "" && !oneOf(cfg.IPAddressType, ipAddressType...) {
-		return nil, invalid("SubnetMapping.IPAddressType %q is not valid", cfg.IPAddressType)
+	if err := validateIPType(cfg.IPAddressType); err != nil {
+		return nil, err
 	}
 
 	if err := validateDescription(cfg.Description); err != nil {
@@ -39,7 +39,8 @@ func (m *Mock) CreateVpcEndpointAssociation(
 		return nil, err
 	}
 
-	if _, ok := m.firewallByARN(cfg.FirewallARN); !ok {
+	fw, ok := m.firewallByARN(cfg.FirewallARN)
+	if !ok {
 		return nil, cerrors.Newf(cerrors.NotFound, "firewall %q not found", cfg.FirewallARN)
 	}
 
@@ -51,7 +52,7 @@ func (m *Mock) CreateVpcEndpointAssociation(
 		VPCID:            cfg.VPCID,
 		SubnetID:         cfg.SubnetID,
 		IPAddressType:    cfg.IPAddressType,
-		AvailabilityZone: nfdriver.ZoneForKey(m.opts.Region, cfg.SubnetID),
+		AvailabilityZone: m.associationZone(fw, cfg.SubnetID),
 		Description:      cfg.Description,
 		Status:           statusReady,
 		Tags:             copyTags(cfg.Tags),
@@ -154,4 +155,14 @@ func cloneAssociation(a *nfdriver.VPCEndpointAssociation) *nfdriver.VPCEndpointA
 	out.Tags = copyTags(a.Tags)
 
 	return &out
+}
+
+// associationZone is the Availability Zone of an association's subnet: the zone
+// the firewall already assigned that subnet, else the zone its id maps to.
+func (m *Mock) associationZone(fw *nfdriver.Firewall, subnetID string) string {
+	if d, ok := fw.SubnetDetails[subnetID]; ok {
+		return d.AvailabilityZone
+	}
+
+	return zoneForKey(m.opts.Region, subnetID)
 }

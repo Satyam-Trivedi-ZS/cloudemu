@@ -299,9 +299,9 @@ func TestPagination_AllLists_PageSize1_Walk(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	scope := nfdriver.FlowOperationScope{FirewallARN: fw.ARN, AvailabilityZone: "us-east-1a"}
+	scope := nfdriver.FlowOperationScope{FirewallARN: fw.ARN, AvailabilityZone: seedZone}
 	for i := 0; i < 3; i++ {
-		_, err := m.StartFlowFlush(bg, nfdriver.FlowOperationRequest{FirewallARN: fw.ARN, AvailabilityZone: "us-east-1a"})
+		_, err := m.StartFlowFlush(bg, nfdriver.FlowOperationRequest{FirewallARN: fw.ARN, AvailabilityZone: seedZone})
 		require.NoError(t, err)
 	}
 

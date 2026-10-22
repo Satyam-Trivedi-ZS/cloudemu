@@ -3,7 +3,6 @@ package networkfirewall
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/stackshy/cloudemu/v2/server/wire"
@@ -71,21 +70,22 @@ type firewallStatusJSON struct {
 
 // toFirewallStatusJSON builds the FirewallStatus block. A firewall in the
 // emulator is always fully provisioned, so it reports READY / IN_SYNC with one
-// SyncState per attached subnet keyed by a synthetic Availability Zone.
+// SyncState per attached subnet, keyed by the Availability Zone and endpoint
+// the firewall assigned that subnet.
 func toFirewallStatusJSON(f *nfdriver.Firewall) firewallStatusJSON {
-	region := arnRegion(f.ARN)
-
 	states := make(map[string]syncStateJSON, len(f.SubnetIDs))
-	for i, subnet := range f.SubnetIDs {
-		states[nfdriver.AvailabilityZoneFor(region, i)] = syncStateJSON{Attachment: attachmentJSON{
+
+	for _, subnet := range f.SubnetIDs {
+		d := f.SubnetDetails[subnet]
+		states[d.AvailabilityZone] = syncStateJSON{Attachment: attachmentJSON{
 			SubnetID:   subnet,
-			EndpointID: "vpce-" + f.ID,
+			EndpointID: d.EndpointID,
 			Status:     "READY",
 		}}
 	}
 
 	for _, az := range f.AvailabilityZones {
-		states[az] = syncStateJSON{Attachment: attachmentJSON{EndpointID: "vpce-" + f.ID, Status: "READY"}}
+		states[az] = syncStateJSON{Attachment: attachmentJSON{EndpointID: "vpce-" + f.ID + "-" + az, Status: "READY"}}
 	}
 
 	if len(states) == 0 {
@@ -97,17 +97,6 @@ func toFirewallStatusJSON(f *nfdriver.Firewall) firewallStatusJSON {
 		ConfigurationSyncStateSummary: "IN_SYNC",
 		SyncStates:                    states,
 	}
-}
-
-// arnRegion extracts the region field (index 3) from an AWS ARN, defaulting to
-// "us-east-1" when the ARN is malformed or region-less.
-func arnRegion(arn string) string {
-	parts := strings.Split(arn, ":")
-	if len(parts) > 3 && parts[3] != "" {
-		return parts[3]
-	}
-
-	return "us-east-1"
 }
 
 type createFirewallRequest struct {
@@ -142,6 +131,7 @@ func (h *Handler) createFirewall(w http.ResponseWriter, r *http.Request) {
 		PolicyARN:                        req.FirewallPolicyArn,
 		VPCID:                            req.VpcID,
 		SubnetIDs:                        subnetIDs(req.SubnetMappings),
+		SubnetIPTypes:                    subnetIPTypes(req.SubnetMappings),
 		AvailabilityZones:                zoneNames(req.AvailabilityZoneMappings),
 		TransitGatewayID:                 req.TransitGatewayID,
 		Description:                      req.Description,
@@ -236,11 +226,6 @@ func withNextToken(resp map[string]any, next string) map[string]any {
 }
 
 func toFirewallJSON(f *nfdriver.Firewall) firewallJSON {
-	mappings := make([]subnetMapping, 0, len(f.SubnetIDs))
-	for _, s := range f.SubnetIDs {
-		mappings = append(mappings, subnetMapping{SubnetID: s})
-	}
-
 	zones := make([]zoneMapping, 0, len(f.AvailabilityZones))
 	for _, z := range f.AvailabilityZones {
 		zones = append(zones, zoneMapping{AvailabilityZone: z})
@@ -248,7 +233,7 @@ func toFirewallJSON(f *nfdriver.Firewall) firewallJSON {
 
 	return firewallJSON{
 		FirewallName: f.Name, FirewallArn: f.ARN, FirewallID: f.ID, FirewallPolicyArn: f.PolicyARN,
-		VpcID: f.VPCID, SubnetMappings: mappings, AvailabilityZoneMappings: zones,
+		VpcID: f.VPCID, SubnetMappings: subnetMappingsOf(f), AvailabilityZoneMappings: zones,
 		TransitGatewayID: f.TransitGatewayID, Description: f.Description,
 		DeleteProtection: f.DeleteProtection, SubnetChangeProtection: f.SubnetChangeProtection,
 		FirewallPolicyChangeProtection:   f.FirewallPolicyChangeProtection,
@@ -268,6 +253,30 @@ func subnetIDs(mappings []subnetMapping) []string {
 	out := make([]string, 0, len(mappings))
 	for _, m := range mappings {
 		out = append(out, m.SubnetID)
+	}
+
+	return out
+}
+
+// subnetIPTypes maps each mapping's subnet id to its IPAddressType, leaving out
+// subnets that did not set one.
+func subnetIPTypes(mappings []subnetMapping) map[string]string {
+	out := map[string]string{}
+
+	for _, m := range mappings {
+		if m.IPAddressType != "" {
+			out[m.SubnetID] = m.IPAddressType
+		}
+	}
+
+	return out
+}
+
+// driverSubnets converts wire subnet mappings to driver ones.
+func driverSubnets(mappings []subnetMapping) []nfdriver.SubnetMapping {
+	out := make([]nfdriver.SubnetMapping, 0, len(mappings))
+	for _, m := range mappings {
+		out = append(out, nfdriver.SubnetMapping{SubnetID: m.SubnetID, IPAddressType: m.IPAddressType})
 	}
 
 	return out

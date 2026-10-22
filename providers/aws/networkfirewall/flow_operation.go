@@ -95,7 +95,7 @@ func (m *Mock) validateFlowScope(s nfdriver.FlowOperationScope) error {
 		return invalid("either AvailabilityZone or VpcEndpointAssociationArn is required")
 	}
 
-	if !oneOf(s.AvailabilityZone, nfdriver.SyncZones(fw, m.opts.Region)...) {
+	if !oneOf(s.AvailabilityZone, syncZones(fw)...) {
 		return invalid("firewall %q has no endpoint in Availability Zone %q", fw.Name, s.AvailabilityZone)
 	}
 

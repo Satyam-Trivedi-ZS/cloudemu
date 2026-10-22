@@ -22,7 +22,7 @@ func (m *Mock) TagResource(_ context.Context, arn string, tags map[string]string
 		return cerrors.Newf(cerrors.NotFound, "resource %q not found", arn)
 	}
 
-	if len(t)+len(tags) > maxTags {
+	if len(t)+newKeys(t, tags) > maxTags {
 		return invalid("at most %d tags are allowed", maxTags)
 	}
 
@@ -128,4 +128,18 @@ func (m *Mock) taggableExtra(arn string) map[string]string {
 	}
 
 	return nil
+}
+
+// newKeys counts the keys of add that the resource does not have yet: re-tagging
+// an existing key is an overwrite, not a new tag.
+func newKeys(have, add map[string]string) int {
+	n := 0
+
+	for k := range add {
+		if _, ok := have[k]; !ok {
+			n++
+		}
+	}
+
+	return n
 }

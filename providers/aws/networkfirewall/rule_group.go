@@ -66,6 +66,11 @@ func (m *Mock) CreateRuleGroup(_ context.Context, cfg nfdriver.CreateRuleGroupCo
 		UpdateToken:        newToken(),
 		Tags:               copyTags(cfg.Tags),
 	}
+	// STATEFUL and STATEFUL_DOMAIN groups share the stateful ARN namespace.
+	if _, taken := m.ruleGroupByARN(rg.ARN); taken {
+		return nil, cerrors.Newf(cerrors.AlreadyExists, "rule group %q already exists", cfg.Name)
+	}
+
 	if !m.ruleGroups.SetIfAbsent(ruleGroupKey(cfg.Name, cfg.Type), rg) {
 		return nil, cerrors.Newf(cerrors.AlreadyExists, "rule group %q already exists", cfg.Name)
 	}
@@ -239,6 +244,10 @@ func (m *Mock) matchRuleGroups(f nfdriver.RuleGroupFilter) []*nfdriver.RuleGroup
 func (m *Mock) findRuleGroup(name, arn, ruleType string) (*nfdriver.RuleGroup, error) {
 	if err := requireIdentifier("RuleGroup", name, arn); err != nil {
 		return nil, err
+	}
+
+	if name != "" && ruleType == "" && arn == "" {
+		return nil, invalid("Type is required when RuleGroupArn is not set")
 	}
 
 	if name != "" && ruleType != "" && !oneOf(ruleType, ruleTypeStateful, ruleTypeStateless, ruleTypeStatefulDomain) {

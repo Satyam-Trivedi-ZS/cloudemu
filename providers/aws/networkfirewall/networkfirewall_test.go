@@ -3,6 +3,7 @@ package networkfirewall
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -178,7 +179,7 @@ func TestFirewallDepth(t *testing.T) {
 
 	_ = pol
 
-	assoc, err := m.AssociateSubnets(bg, "fw-1", []string{"subnet-1", "subnet-2"}, "")
+	assoc, err := m.AssociateSubnets(bg, "fw-1", []nfdriver.SubnetMapping{{SubnetID: "subnet-1"}, {SubnetID: "subnet-2"}}, "")
 	require.NoError(t, err)
 	assert.Len(t, assoc.SubnetIDs, 2)
 
@@ -245,3 +246,146 @@ func TestFirewallConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestRuleGroup_StatefulAndDomainShareNamespace(t *testing.T) {
+	m := newMock()
+
+	stateful := seedRuleGroup(t, m, "dup", "STATEFUL", 10)
+
+	_, err := m.CreateRuleGroup(bg, nfdriver.CreateRuleGroupConfig{Name: "dup", Type: "STATEFUL_DOMAIN", Capacity: 10})
+	require.Error(t, err)
+	assert.True(t, cerrors.IsAlreadyExists(err))
+
+	// The ARN of the first group still resolves to it, and it is the only one.
+	got, err := m.DescribeRuleGroup(bg, "", stateful.ARN, "")
+	require.NoError(t, err)
+	assert.Equal(t, "STATEFUL", got.Type)
+
+	list, _, err := m.ListRuleGroups(bg, nfdriver.RuleGroupFilter{}, nfdriver.ListOptions{})
+	require.NoError(t, err)
+	assert.Len(t, list, 1)
+}
+
+func TestRuleGroup_NameWithoutTypeIsRejected(t *testing.T) {
+	m := newMock()
+	seedRuleGroup(t, m, "y", "STATELESS", 10)
+	seedRuleGroup(t, m, "y", "STATEFUL", 10)
+
+	_, err := m.DescribeRuleGroup(bg, "y", "", "")
+	require.True(t, cerrors.IsInvalidArgument(err), "got %v", err)
+
+	_, err = m.DescribeRuleGroupMetadata(bg, "y", "", "")
+	require.True(t, cerrors.IsInvalidArgument(err), "got %v", err)
+
+	got, err := m.DescribeRuleGroup(bg, "y", "", "STATEFUL")
+	require.NoError(t, err)
+	assert.Equal(t, "STATEFUL", got.Type)
+}
+
+func TestTags_RetagAtLimitAllowed_NewKeyRefused(t *testing.T) {
+	m := newMock()
+	pol := seedPolicy(t, m, "pol-1")
+
+	full := make(map[string]string, maxTags)
+	for i := 0; i < maxTags; i++ {
+		full[fmt.Sprintf("k%d", i)] = "v"
+	}
+
+	require.NoError(t, m.TagResource(bg, pol.ARN, full))
+
+	// Same keys, new values: not new tags, so allowed.
+	require.NoError(t, m.TagResource(bg, pol.ARN, map[string]string{"k0": "changed", "k1": "changed"}))
+
+	err := m.TagResource(bg, pol.ARN, map[string]string{"extra": "v"})
+	require.True(t, cerrors.IsInvalidArgument(err), "got %v", err)
+}
+
+func TestSubnets_EmptyAndUnknownIDsRejected(t *testing.T) {
+	m := newMock()
+	_, fw := seedStack(t, m)
+
+	_, err := m.AssociateSubnets(bg, "fw-1", []nfdriver.SubnetMapping{{SubnetID: ""}}, "")
+	require.True(t, cerrors.IsInvalidArgument(err), "got %v", err)
+
+	_, err = m.DisassociateSubnets(bg, "fw-1", []string{"subnet-unknown"}, "")
+	require.True(t, cerrors.IsInvalidArgument(err), "got %v", err)
+
+	got, err := m.DescribeFirewall(bg, "fw-1", "")
+	require.NoError(t, err)
+	assert.Equal(t, fw.UpdateToken, got.UpdateToken, "a rejected call must not rotate the token")
+	assert.Equal(t, []string{"subnet-1"}, got.SubnetIDs)
+
+	_, err = m.CreateFirewall(bg, nfdriver.CreateFirewallConfig{
+		Name: "fw-empty", PolicyARN: fw.PolicyARN, VPCID: "vpc-1a2b", SubnetIDs: []string{""},
+	})
+	require.True(t, cerrors.IsInvalidArgument(err), "got %v", err)
+}
+
+func TestSubnets_ZonePerSubnetIsStableAndUnique(t *testing.T) {
+	m := newMock()
+	pol := seedPolicy(t, m, "pol-1")
+
+	fw, err := m.CreateFirewall(bg, nfdriver.CreateFirewallConfig{
+		Name: "fw-az", PolicyARN: pol.ARN, VPCID: "vpc-1a2b", SubnetIDs: []string{"subnet-a", "subnet-b"},
+		SubnetIPTypes: map[string]string{"subnet-a": "IPV4"},
+	})
+	require.NoError(t, err)
+
+	za, zb := fw.SubnetDetails["subnet-a"], fw.SubnetDetails["subnet-b"]
+	assert.NotEmpty(t, za.AvailabilityZone)
+	assert.NotEqual(t, za.AvailabilityZone, zb.AvailabilityZone, "one subnet per zone")
+	assert.NotEqual(t, za.EndpointID, zb.EndpointID, "each zone has its own endpoint")
+	assert.Equal(t, "IPV4", za.IPAddressType)
+
+	// Removing the first subnet must not move the second one.
+	after, err := m.DisassociateSubnets(bg, "fw-az", []string{"subnet-a"}, "")
+	require.NoError(t, err)
+	assert.Equal(t, zb, after.SubnetDetails["subnet-b"])
+	assert.NotContains(t, after.SubnetDetails, "subnet-a")
+
+	// The zone a flow operation accepts is the zone the subnet reports.
+	_, err = m.StartFlowCapture(bg, nfdriver.FlowOperationRequest{FirewallARN: fw.ARN, AvailabilityZone: zb.AvailabilityZone})
+	require.NoError(t, err)
+
+	meta, err := m.DescribeFirewallMetadata(bg, fw.ARN)
+	require.NoError(t, err)
+	assert.Equal(t, []string{zb.AvailabilityZone}, meta.AvailabilityZones)
+
+	// A VPC endpoint association for the same subnet lands in the same zone.
+	assoc, err := m.CreateVpcEndpointAssociation(bg, nfdriver.CreateVPCEndpointAssociationConfig{
+		FirewallARN: fw.ARN, VPCID: "vpc-1a2b", SubnetID: "subnet-b",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, zb.AvailabilityZone, assoc.AvailabilityZone)
+}
+
+func TestSubnets_AssociateKeepsIPAddressType(t *testing.T) {
+	m := newMock()
+	seedStack(t, m)
+
+	fw, err := m.AssociateSubnets(bg, "fw-1", []nfdriver.SubnetMapping{{SubnetID: "subnet-2", IPAddressType: "DUALSTACK"}}, "")
+	require.NoError(t, err)
+	assert.Equal(t, "DUALSTACK", fw.SubnetDetails["subnet-2"].IPAddressType)
+
+	_, err = m.AssociateSubnets(bg, "fw-1", []nfdriver.SubnetMapping{{SubnetID: "subnet-3", IPAddressType: "BOGUS"}}, "")
+	require.True(t, cerrors.IsInvalidArgument(err), "got %v", err)
+}
+
+func TestSnapshot_FirewallWithoutSubnetDetailsGetsZones(t *testing.T) {
+	m := newMock()
+	_, fw := seedStack(t, m)
+
+	m.mu.Lock()
+	stored, _ := m.firewalls.Get(fw.Name)
+	stored.SubnetDetails = nil
+	m.backfillRestoredState()
+	m.mu.Unlock()
+
+	got, err := m.DescribeFirewall(bg, "fw-1", "")
+	require.NoError(t, err)
+	assert.NotEmpty(t, got.SubnetDetails["subnet-1"].AvailabilityZone)
+}
+
+// seedZone is the Availability Zone the emulator assigns "subnet-1", the subnet
+// every seeded firewall is attached to.
+var seedZone = zoneForKey("us-east-1", "subnet-1")

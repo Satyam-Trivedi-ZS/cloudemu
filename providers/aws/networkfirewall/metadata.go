@@ -37,7 +37,7 @@ func (m *Mock) DescribeFirewallMetadata(_ context.Context, firewallARN string) (
 		PolicyARN:         fw.PolicyARN,
 		Description:       fw.Description,
 		Status:            fw.Status,
-		AvailabilityZones: nfdriver.SyncZones(fw, m.opts.Region),
+		AvailabilityZones: syncZones(fw),
 	}, nil
 }
 

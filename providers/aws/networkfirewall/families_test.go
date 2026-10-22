@@ -333,7 +333,7 @@ func TestMetadata_Firewall_RuleGroup(t *testing.T) {
 	assert.Equal(t, fw.ARN, meta.FirewallARN)
 	assert.Equal(t, pol.ARN, meta.PolicyARN)
 	assert.Equal(t, "READY", meta.Status)
-	assert.Equal(t, []string{"us-east-1a"}, meta.AvailabilityZones)
+	assert.Equal(t, []string{seedZone}, meta.AvailabilityZones)
 
 	_, err = m.DescribeFirewallMetadata(bg, "arn:aws:network-firewall:us-east-1:000000000000:firewall/ghost")
 	assert.True(t, cerrors.IsNotFound(err))
@@ -384,9 +384,9 @@ func TestRuleGroupSummary_Stateless_InvalidRequest(t *testing.T) {
 func TestFlowOperations_StartDescribeListResults(t *testing.T) {
 	m, clock := newClockMock(t)
 	_, fw := seedStack(t, m)
-	scope := nfdriver.FlowOperationScope{FirewallARN: fw.ARN, AvailabilityZone: "us-east-1a"}
+	scope := nfdriver.FlowOperationScope{FirewallARN: fw.ARN, AvailabilityZone: seedZone}
 
-	capture, err := m.StartFlowCapture(bg, nfdriver.FlowOperationRequest{FirewallARN: fw.ARN, AvailabilityZone: "us-east-1a"})
+	capture, err := m.StartFlowCapture(bg, nfdriver.FlowOperationRequest{FirewallARN: fw.ARN, AvailabilityZone: seedZone})
 	require.NoError(t, err)
 	assert.Regexp(t, uuidPattern, capture.ID)
 	assert.Equal(t, "COMPLETED", capture.Status)
@@ -394,7 +394,7 @@ func TestFlowOperations_StartDescribeListResults(t *testing.T) {
 
 	clock.Advance(time.Second)
 
-	flush, err := m.StartFlowFlush(bg, nfdriver.FlowOperationRequest{FirewallARN: fw.ARN, AvailabilityZone: "us-east-1a"})
+	flush, err := m.StartFlowFlush(bg, nfdriver.FlowOperationRequest{FirewallARN: fw.ARN, AvailabilityZone: seedZone})
 	require.NoError(t, err)
 	assert.Equal(t, "FLOW_FLUSH", flush.Type)
 
@@ -424,7 +424,7 @@ func TestFlowOperations_Validation(t *testing.T) {
 	assoc := vpcAssociation(t, m, fw.ARN, "subnet-a")
 	other := seedFirewall(t, m, "fw-2", pol.ARN)
 
-	_, err := m.StartFlowCapture(bg, nfdriver.FlowOperationRequest{FirewallARN: "arn:aws:network-firewall:us-east-1:000000000000:firewall/ghost", AvailabilityZone: "us-east-1a"})
+	_, err := m.StartFlowCapture(bg, nfdriver.FlowOperationRequest{FirewallARN: "arn:aws:network-firewall:us-east-1:000000000000:firewall/ghost", AvailabilityZone: seedZone})
 	assert.True(t, cerrors.IsNotFound(err), "%v", err)
 
 	_, err = m.StartFlowCapture(bg, nfdriver.FlowOperationRequest{FirewallARN: fw.ARN})
@@ -437,19 +437,19 @@ func TestFlowOperations_Validation(t *testing.T) {
 	assert.True(t, cerrors.IsInvalidArgument(err), "association of another firewall: %v", err)
 
 	neg := int32(-1)
-	_, err = m.StartFlowFlush(bg, nfdriver.FlowOperationRequest{FirewallARN: fw.ARN, AvailabilityZone: "us-east-1a", MinimumFlowAgeSeconds: &neg})
+	_, err = m.StartFlowFlush(bg, nfdriver.FlowOperationRequest{FirewallARN: fw.ARN, AvailabilityZone: seedZone, MinimumFlowAgeSeconds: &neg})
 	assert.True(t, cerrors.IsInvalidArgument(err), "%v", err)
 
-	_, _, err = m.ListFlowOperations(bg, nfdriver.FlowOperationScope{FirewallARN: fw.ARN, AvailabilityZone: "us-east-1a"}, "BOGUS", nfdriver.ListOptions{})
+	_, _, err = m.ListFlowOperations(bg, nfdriver.FlowOperationScope{FirewallARN: fw.ARN, AvailabilityZone: seedZone}, "BOGUS", nfdriver.ListOptions{})
 	assert.True(t, cerrors.IsInvalidArgument(err), "%v", err)
 
-	_, err = m.DescribeFlowOperation(bg, nfdriver.FlowOperationScope{FirewallARN: fw.ARN, AvailabilityZone: "us-east-1a"}, "no-such-op")
+	_, err = m.DescribeFlowOperation(bg, nfdriver.FlowOperationScope{FirewallARN: fw.ARN, AvailabilityZone: seedZone}, "no-such-op")
 	assert.True(t, cerrors.IsNotFound(err), "%v", err)
 
 	ok, err := m.StartFlowCapture(bg, nfdriver.FlowOperationRequest{FirewallARN: fw.ARN, VPCEndpointAssociationARN: assoc.ARN})
 	require.NoError(t, err)
 
-	_, err = m.DescribeFlowOperation(bg, nfdriver.FlowOperationScope{FirewallARN: fw.ARN, AvailabilityZone: "us-east-1a"}, ok.ID)
+	_, err = m.DescribeFlowOperation(bg, nfdriver.FlowOperationScope{FirewallARN: fw.ARN, AvailabilityZone: seedZone}, ok.ID)
 	assert.True(t, cerrors.IsNotFound(err), "an operation of another endpoint is not visible: %v", err)
 }
 
@@ -458,13 +458,13 @@ func TestFlowOperations_AsyncSettle(t *testing.T) {
 	m := New(config.NewOptions(config.WithClock(clock), config.WithAsyncSettle()))
 	_, fw := seedStack(t, m)
 
-	op, err := m.StartFlowFlush(bg, nfdriver.FlowOperationRequest{FirewallARN: fw.ARN, AvailabilityZone: "us-east-1a"})
+	op, err := m.StartFlowFlush(bg, nfdriver.FlowOperationRequest{FirewallARN: fw.ARN, AvailabilityZone: seedZone})
 	require.NoError(t, err)
 	assert.Equal(t, "IN_PROGRESS", op.Status)
 
 	clock.Advance(10 * time.Second)
 
-	got, err := m.DescribeFlowOperation(bg, nfdriver.FlowOperationScope{FirewallARN: fw.ARN, AvailabilityZone: "us-east-1a"}, op.ID)
+	got, err := m.DescribeFlowOperation(bg, nfdriver.FlowOperationScope{FirewallARN: fw.ARN, AvailabilityZone: seedZone}, op.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "COMPLETED", got.Status)
 }

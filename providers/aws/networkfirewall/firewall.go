@@ -31,7 +31,6 @@ func (m *Mock) CreateFirewall(_ context.Context, cfg nfdriver.CreateFirewallConf
 		ID:                               idgen.GenerateID(""),
 		PolicyARN:                        cfg.PolicyARN,
 		VPCID:                            cfg.VPCID,
-		SubnetIDs:                        cloneStrings(cfg.SubnetIDs),
 		AvailabilityZones:                cloneStrings(cfg.AvailabilityZones),
 		TransitGatewayID:                 cfg.TransitGatewayID,
 		Description:                      cfg.Description,
@@ -44,6 +43,18 @@ func (m *Mock) CreateFirewall(_ context.Context, cfg nfdriver.CreateFirewallConf
 		UpdateToken:                      newToken(),
 		Tags:                             copyTags(cfg.Tags),
 	}
+	for _, s := range cfg.SubnetIDs {
+		if oneOf(s, fw.SubnetIDs...) {
+			continue
+		}
+
+		if err := m.assignSubnet(fw, s, cfg.SubnetIPTypes[s]); err != nil {
+			return nil, err
+		}
+
+		fw.SubnetIDs = append(fw.SubnetIDs, s)
+	}
+
 	if !m.firewalls.SetIfAbsent(cfg.Name, fw) {
 		return nil, cerrors.Newf(cerrors.AlreadyExists, "firewall %q already exists", cfg.Name)
 	}
@@ -110,6 +121,16 @@ func validateFirewallPlacement(cfg *nfdriver.CreateFirewallConfig) error {
 
 	if cfg.VPCID == "" {
 		return invalid("VpcId is required")
+	}
+
+	for _, s := range cfg.SubnetIDs {
+		if err := validateSubnetID(s); err != nil {
+			return err
+		}
+
+		if err := validateIPType(cfg.SubnetIPTypes[s]); err != nil {
+			return err
+		}
 	}
 
 	return validateVPCID(cfg.VPCID)
@@ -230,6 +251,7 @@ func (m *Mock) lookupFirewall(name, arn string) (*nfdriver.Firewall, bool) {
 func (m *Mock) outFirewall(f *nfdriver.Firewall) *nfdriver.Firewall {
 	out := *f
 	out.SubnetIDs = cloneStrings(f.SubnetIDs)
+	out.SubnetDetails = cloneSubnetDetails(f.SubnetDetails)
 	out.AvailabilityZones = cloneStrings(f.AvailabilityZones)
 	out.EnabledAnalysisTypes = cloneStrings(f.EnabledAnalysisTypes)
 	out.Tags = copyTags(f.Tags)
@@ -301,7 +323,7 @@ func (m *Mock) AssociateFirewallPolicy(_ context.Context, firewallName, policyAR
 func (m *Mock) AssociateSubnets(
 	_ context.Context,
 	firewallName string,
-	subnetIDs []string,
+	subnets []nfdriver.SubnetMapping,
 	updateToken string,
 ) (*nfdriver.Firewall, error) {
 	return m.mutateFirewall(firewallName, updateToken, func(fw *nfdriver.Firewall) error {
@@ -309,20 +331,30 @@ func (m *Mock) AssociateSubnets(
 			return err
 		}
 
-		if len(subnetIDs) == 0 {
+		if len(subnets) == 0 {
 			return invalid("SubnetMappings is required")
 		}
 
-		seen := make(map[string]bool, len(fw.SubnetIDs))
-		for _, s := range fw.SubnetIDs {
-			seen[s] = true
+		for _, s := range subnets {
+			if err := validateSubnetID(s.SubnetID); err != nil {
+				return err
+			}
+
+			if err := validateIPType(s.IPAddressType); err != nil {
+				return err
+			}
 		}
 
-		for _, s := range subnetIDs {
-			if !seen[s] {
-				fw.SubnetIDs = append(fw.SubnetIDs, s)
-				seen[s] = true
+		for _, s := range subnets {
+			if oneOf(s.SubnetID, fw.SubnetIDs...) {
+				continue
 			}
+
+			if err := m.assignSubnet(fw, s.SubnetID, s.IPAddressType); err != nil {
+				return err
+			}
+
+			fw.SubnetIDs = append(fw.SubnetIDs, s.SubnetID)
 		}
 
 		return nil
@@ -346,7 +378,16 @@ func (m *Mock) DisassociateSubnets(
 		}
 
 		remove := make(map[string]bool, len(subnetIDs))
+
 		for _, s := range subnetIDs {
+			if err := validateSubnetID(s); err != nil {
+				return err
+			}
+
+			if !oneOf(s, fw.SubnetIDs...) {
+				return invalid("subnet %q is not associated with firewall %q", s, fw.Name)
+			}
+
 			remove[s] = true
 		}
 
@@ -359,6 +400,10 @@ func (m *Mock) DisassociateSubnets(
 		}
 
 		fw.SubnetIDs = kept
+
+		for s := range remove {
+			delete(fw.SubnetDetails, s)
+		}
 
 		return nil
 	})

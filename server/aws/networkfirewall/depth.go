@@ -106,7 +106,7 @@ type subnetsRequest struct {
 func (h *Handler) associateSubnets(w http.ResponseWriter, r *http.Request) {
 	serveFirewallOp[subnetsRequest](h, w, r,
 		func(c nfdriver.NetworkFirewall, name string, req *subnetsRequest) (*nfdriver.Firewall, map[string]any, error) {
-			fw, err := c.AssociateSubnets(r.Context(), name, subnetIDs(req.SubnetMappings), req.UpdateToken)
+			fw, err := c.AssociateSubnets(r.Context(), name, driverSubnets(req.SubnetMappings), req.UpdateToken)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -130,7 +130,7 @@ func (h *Handler) disassociateSubnets(w http.ResponseWriter, r *http.Request) {
 func subnetMappingsOf(fw *nfdriver.Firewall) []subnetMapping {
 	mappings := make([]subnetMapping, 0, len(fw.SubnetIDs))
 	for _, s := range fw.SubnetIDs {
-		mappings = append(mappings, subnetMapping{SubnetID: s})
+		mappings = append(mappings, subnetMapping{SubnetID: s, IPAddressType: fw.SubnetDetails[s].IPAddressType})
 	}
 
 	return mappings

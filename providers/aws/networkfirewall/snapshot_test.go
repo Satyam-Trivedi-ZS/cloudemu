@@ -35,7 +35,7 @@ func TestSnapshotRoundTripNetworkFirewall(t *testing.T) {
 	}))
 	require.NoError(t, src.PutResourcePolicy(bg, pol.ARN, policyDoc("network-firewall:AssociateFirewallPolicy")))
 
-	flow, err := src.StartFlowFlush(bg, nfdriver.FlowOperationRequest{FirewallARN: fw.ARN, AvailabilityZone: "us-east-1a"})
+	flow, err := src.StartFlowFlush(bg, nfdriver.FlowOperationRequest{FirewallARN: fw.ARN, AvailabilityZone: seedZone})
 	require.NoError(t, err)
 
 	_, err = src.UpdateFirewallAnalysisSettings(bg, "fw-1", []string{"TLS_SNI"}, "")
@@ -77,7 +77,7 @@ func TestSnapshotRoundTripNetworkFirewall(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, policy, "AssociateFirewallPolicy")
 
-	_, err = dst.DescribeFlowOperation(bg, nfdriver.FlowOperationScope{FirewallARN: fw.ARN, AvailabilityZone: "us-east-1a"}, flow.ID)
+	_, err = dst.DescribeFlowOperation(bg, nfdriver.FlowOperationScope{FirewallARN: fw.ARN, AvailabilityZone: seedZone}, flow.ID)
 	require.NoError(t, err)
 
 	_, err = dst.GetAnalysisReport(bg, "fw-1", "", rep.ID)
