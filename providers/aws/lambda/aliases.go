@@ -174,7 +174,8 @@ func (m *Mock) GetAlias(ctx context.Context, functionName, aliasName string) (*d
 
 	ad, ok := fd.aliases.Get(aliasName)
 	if !ok {
-		return nil, cerrors.Newf(cerrors.NotFound, "alias %s not found", aliasName)
+		// Real Lambda's GetAlias text names the alias-qualified function ARN.
+		return nil, cerrors.Newf(cerrors.NotFound, "Cannot find alias arn: %s:%s", fd.info.ARN, aliasName)
 	}
 
 	ad.mu.Lock()

@@ -64,7 +64,7 @@ func (m *Mock) publishVersion(
 	// RevisionID, so a last-published version cut from the current $LATEST revision
 	// means nothing changed and no new version is created.
 	if n := len(fd.versions); n > 0 && fd.versions[n-1].revisionID == fd.info.RevisionID {
-		return versionResult(functionName, fd.versions[n-1], description), nil
+		return m.versionResult(functionName, fd.versions[n-1], description), nil
 	}
 
 	verNum := fd.nextVersion
@@ -86,19 +86,22 @@ func (m *Mock) publishVersion(
 		createdAt:   m.opts.Clock.Now().UTC().Format(time.RFC3339),
 		description: verDesc,
 		awsConfig:   cloneAWSConfig(&fd.awsConfig),
+		// Only the atomic Publish=true on CreateFunction can cut a version while
+		// the function is still Pending; a standalone PublishVersion is refused then.
+		cutWhilePending: !gate && m.isPending(functionName),
 	}
 	fd.versions = append(fd.versions, vd)
 	m.funcs.Set(functionName, fd)
 
-	return versionResult(functionName, vd, ""), nil
+	return m.versionResult(functionName, vd, ""), nil
 }
 
 // versionResult renders a published version's driver.FunctionVersion, used both
 // when a fresh version is cut and when a no-change PublishVersion returns the
 // existing version. A non-empty description overrides the stored version
 // description, matching PublishVersion's Description parameter.
-func versionResult(functionName string, v *versionData, description string) *driver.FunctionVersion {
-	out := versionInfo(functionName, v)
+func (m *Mock) versionResult(functionName string, v *versionData, description string) *driver.FunctionVersion {
+	out := m.versionInfo(functionName, v)
 	if description != "" {
 		out.Description = description
 	}
@@ -107,9 +110,9 @@ func versionResult(functionName string, v *versionData, description string) *dri
 }
 
 // versionInfo renders a published version from its frozen snapshot only, never
-// from the mutable $LATEST state.
-func versionInfo(functionName string, v *versionData) driver.FunctionVersion {
-	return driver.FunctionVersion{
+// from the mutable $LATEST state, with the version's own lifecycle.
+func (m *Mock) versionInfo(functionName string, v *versionData) driver.FunctionVersion {
+	out := driver.FunctionVersion{
 		FunctionName: functionName,
 		Version:      v.version,
 		Description:  v.description,
@@ -124,6 +127,28 @@ func versionInfo(functionName string, v *versionData) driver.FunctionVersion {
 		Role:         v.config.Role,
 		Environment:  maps.Clone(v.config.Environment),
 	}
+
+	m.observeVersion(functionName, v, &out)
+
+	return out
+}
+
+// observeVersion sets a published version's lifecycle. A published version is
+// immutable, so an update of $LATEST (and its InProgress window) never reaches
+// it: it is Active with LastUpdateStatus Successful. The one exception is the
+// version CreateFunction(Publish=true) cut, which AWS reports Pending (reason
+// Creating, no LastUpdateStatus) until the function's creation completes.
+func (m *Mock) observeVersion(functionName string, v *versionData, out *driver.FunctionVersion) {
+	if v.cutWhilePending && m.isPending(functionName) {
+		out.State = statePending
+		out.StateReason = stateReasonCreating
+		out.StateReasonCode = stateReasonCodeCreating
+
+		return
+	}
+
+	out.State = stateActive
+	out.LastUpdateStatus = lastUpdateSuccessful
 }
 
 // ListVersions returns all published versions for a function.
@@ -151,7 +176,7 @@ func (m *Mock) ListVersions(ctx context.Context, functionName string) ([]driver.
 	})
 
 	for _, v := range fd.versions {
-		result = append(result, versionInfo(functionName, v))
+		result = append(result, m.versionInfo(functionName, v))
 	}
 
 	return result, nil

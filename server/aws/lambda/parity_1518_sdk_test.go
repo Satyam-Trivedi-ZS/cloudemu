@@ -16,6 +16,7 @@ import (
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	cloudemu "github.com/stackshy/cloudemu/v2"
 	"github.com/stackshy/cloudemu/v2/config"
+	lambdaprov "github.com/stackshy/cloudemu/v2/providers/aws/lambda"
 	awsserver "github.com/stackshy/cloudemu/v2/server/aws"
 )
 
@@ -361,5 +362,273 @@ func TestSDKAsyncSettleWaiters(t *testing.T) {
 	})
 	if err := waitUpdated.Wait(ctx, &awslambda.GetFunctionInput{FunctionName: aws.String("settle")}, 10*time.Second); err != nil {
 		t.Fatalf("FunctionUpdatedV2: %v", err)
+	}
+}
+
+// versionSnapshot is the lifecycle a published version reports on the wire.
+type versionSnapshot struct {
+	lastModified, state, stateReasonCode, lastUpdateStatus string
+}
+
+func snapshotOf(cfg *lambdatypes.FunctionConfiguration) versionSnapshot {
+	return snapshotFields(cfg.LastModified, cfg.State, cfg.StateReasonCode, cfg.LastUpdateStatus)
+}
+
+func snapshotFields(
+	lastModified *string, state lambdatypes.State, code lambdatypes.StateReasonCode, lus lambdatypes.LastUpdateStatus,
+) versionSnapshot {
+	return versionSnapshot{
+		lastModified: aws.ToString(lastModified), state: string(state),
+		stateReasonCode: string(code), lastUpdateStatus: string(lus),
+	}
+}
+
+// getVersionSnapshot reads version of name through both GetFunction --qualifier
+// and ListVersionsByFunction, failing when the two disagree.
+func getVersionSnapshot(t *testing.T, c *awslambda.Client, name, version string) versionSnapshot {
+	t.Helper()
+
+	ctx := context.Background()
+
+	got, err := c.GetFunction(ctx, &awslambda.GetFunctionInput{FunctionName: aws.String(name), Qualifier: aws.String(version)})
+	if err != nil {
+		t.Fatalf("GetFunction --qualifier %s: %v", version, err)
+	}
+
+	fromGet := snapshotOf(got.Configuration)
+
+	vers, err := c.ListVersionsByFunction(ctx, &awslambda.ListVersionsByFunctionInput{FunctionName: aws.String(name)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := range vers.Versions {
+		if aws.ToString(vers.Versions[i].Version) == version {
+			if fromList := snapshotOf(&vers.Versions[i]); fromList != fromGet {
+				t.Fatalf("version %s: ListVersionsByFunction %+v != GetFunction %+v", version, fromList, fromGet)
+			}
+
+			return fromGet
+		}
+	}
+
+	t.Fatalf("version %s missing from ListVersionsByFunction", version)
+
+	return versionSnapshot{}
+}
+
+// TestSDKPublishedVersionKeepsItsOwnLifecycle: a published version is
+// immutable, so GetFunction --qualifier 1 and ListVersionsByFunction report the
+// version's own LastModified (its publish time) and Active/Successful however
+// $LATEST changes afterwards, in default mode and under AsyncSettle.
+func TestSDKPublishedVersionKeepsItsOwnLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		async bool
+	}{{"default", false}, {"async-settle", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := config.NewFakeClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+
+			opts := []config.Option{config.WithClock(fc)}
+			if tc.async {
+				opts = append(opts, config.WithAsyncSettle())
+			}
+
+			c := newParityLambdaClient(t, opts...)
+			ctx := context.Background()
+
+			createParityFunction(t, c, "frozen", []byte("v1-code"))
+			fc.Advance(5 * time.Second)
+
+			pub, err := c.PublishVersion(ctx, &awslambda.PublishVersionInput{FunctionName: aws.String("frozen")})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// The version's LastModified is its publish time, not $LATEST's.
+			want := versionSnapshot{
+				lastModified: fc.Now().UTC().Format(time.RFC3339), state: string(lambdatypes.StateActive),
+				lastUpdateStatus: string(lambdatypes.LastUpdateStatusSuccessful),
+			}
+			if got := snapshotFields(pub.LastModified, pub.State, pub.StateReasonCode, pub.LastUpdateStatus); got != want {
+				t.Fatalf("PublishVersion = %+v, want %+v", got, want)
+			}
+
+			if got := getVersionSnapshot(t, c, "frozen", "1"); got != want {
+				t.Fatalf("version 1 before $LATEST update = %+v, want %+v", got, want)
+			}
+
+			fc.Advance(time.Minute)
+
+			upd, err := c.UpdateFunctionCode(ctx, &awslambda.UpdateFunctionCodeInput{
+				FunctionName: aws.String("frozen"), ZipFile: []byte("v2-code"),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if aws.ToString(upd.LastModified) == want.lastModified {
+				t.Fatalf("$LATEST LastModified did not move (%s); the test needs it to", want.lastModified)
+			}
+
+			if tc.async && upd.LastUpdateStatus != lambdatypes.LastUpdateStatusInProgress {
+				t.Fatalf("$LATEST LastUpdateStatus = %q, want InProgress", upd.LastUpdateStatus)
+			}
+
+			if got := getVersionSnapshot(t, c, "frozen", "1"); got != want {
+				t.Errorf("version 1 after $LATEST update = %+v, want unchanged %+v", got, want)
+			}
+
+			// $LATEST itself still reports the live update.
+			if got := getVersionSnapshot(t, c, "frozen", "$LATEST"); got != snapshotFields(upd.LastModified, upd.State, upd.StateReasonCode, upd.LastUpdateStatus) {
+				t.Errorf("$LATEST = %+v, want %+v", got, snapshotFields(upd.LastModified, upd.State, upd.StateReasonCode, upd.LastUpdateStatus))
+			}
+		})
+	}
+}
+
+// TestSDKPublishOnCreateVersionIsPendingUntilCreated: the version
+// CreateFunction(Publish=true) cuts is Pending until creation completes, then
+// Active/Successful, and a later $LATEST update leaves it untouched.
+func TestSDKPublishOnCreateVersionIsPendingUntilCreated(t *testing.T) {
+	fc := config.NewFakeClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	c := newParityLambdaClient(t, config.WithClock(fc), config.WithAsyncSettle())
+	ctx := context.Background()
+
+	created, err := c.CreateFunction(ctx, &awslambda.CreateFunctionInput{
+		FunctionName: aws.String("pubcreate"),
+		Runtime:      lambdatypes.RuntimePython312,
+		Role:         aws.String("arn:aws:iam::123456789012:role/test"),
+		Handler:      aws.String("main.handler"),
+		Code:         &lambdatypes.FunctionCode{ZipFile: []byte("zip")},
+		Publish:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pending := versionSnapshot{
+		lastModified: aws.ToString(created.LastModified), state: string(lambdatypes.StatePending),
+		stateReasonCode: string(lambdatypes.StateReasonCodeCreating),
+	}
+	if aws.ToString(created.Version) != "1" || snapshotFields(created.LastModified, created.State, created.StateReasonCode, created.LastUpdateStatus) != pending {
+		t.Fatalf("CreateFunction(Publish) = %s %+v, want 1 %+v", aws.ToString(created.Version), snapshotFields(created.LastModified, created.State, created.StateReasonCode, created.LastUpdateStatus), pending)
+	}
+
+	if got := getVersionSnapshot(t, c, "pubcreate", "1"); got != pending {
+		t.Fatalf("version 1 while creating = %+v, want %+v", got, pending)
+	}
+
+	fc.Advance(2 * time.Second)
+
+	active := versionSnapshot{
+		lastModified: pending.lastModified, state: string(lambdatypes.StateActive),
+		lastUpdateStatus: string(lambdatypes.LastUpdateStatusSuccessful),
+	}
+	if got := getVersionSnapshot(t, c, "pubcreate", "1"); got != active {
+		t.Fatalf("version 1 once created = %+v, want %+v", got, active)
+	}
+
+	fc.Advance(time.Minute)
+
+	if _, err := c.UpdateFunctionConfiguration(ctx, &awslambda.UpdateFunctionConfigurationInput{
+		FunctionName: aws.String("pubcreate"), Timeout: aws.Int32(9),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := getVersionSnapshot(t, c, "pubcreate", "1"); got != active {
+		t.Errorf("version 1 after $LATEST update = %+v, want unchanged %+v", got, active)
+	}
+}
+
+// cscDeletedBeforeAttach is a Lambda backend whose code signing config is
+// deleted after CreateFunction's existence check but before the attach, the
+// race the create path must not leave a half-created function behind for.
+type cscDeletedBeforeAttach struct {
+	*lambdaprov.Mock
+}
+
+func (b cscDeletedBeforeAttach) PutFunctionCodeSigningConfig(ctx context.Context, name, arn string) error {
+	if err := b.DeleteCodeSigningConfig(ctx, arn); err != nil {
+		return err
+	}
+
+	return b.Mock.PutFunctionCodeSigningConfig(ctx, name, arn)
+}
+
+// TestSDKCreateFunctionRollsBackWhenCodeSigningAttachFails: when the code
+// signing config disappears between CreateFunction's check and the attach, the
+// request fails with CodeSigningConfigNotFoundException and no function is left
+// behind, so a retry is not a ResourceConflictException.
+func TestSDKCreateFunctionRollsBackWhenCodeSigningAttachFails(t *testing.T) {
+	cloud := cloudemu.NewAWS()
+	ts := httptest.NewServer(awsserver.New(awsserver.Drivers{Lambda: cscDeletedBeforeAttach{cloud.Lambda}}))
+	t.Cleanup(ts.Close)
+
+	cfg, err := awsconfig.LoadDefaultConfig(context.Background(),
+		awsconfig.WithRegion("us-east-1"),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := awslambda.NewFromConfig(cfg, func(o *awslambda.Options) { o.BaseEndpoint = aws.String(ts.URL) })
+	ctx := context.Background()
+
+	csc, err := c.CreateCodeSigningConfig(ctx, &awslambda.CreateCodeSigningConfigInput{
+		AllowedPublishers: &lambdatypes.AllowedPublishers{
+			SigningProfileVersionArns: []string{"arn:aws:signer:us-east-1:123456789012:/signing-profiles/p/abc"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	in := &awslambda.CreateFunctionInput{
+		FunctionName:         aws.String("signed"),
+		Runtime:              lambdatypes.RuntimePython312,
+		Role:                 aws.String("arn:aws:iam::123456789012:role/test"),
+		Handler:              aws.String("main.handler"),
+		Code:                 &lambdatypes.FunctionCode{ZipFile: []byte("zip")},
+		CodeSigningConfigArn: csc.CodeSigningConfig.CodeSigningConfigArn,
+	}
+
+	_, err = c.CreateFunction(ctx, in)
+
+	var notFound *lambdatypes.CodeSigningConfigNotFoundException
+	if !errors.As(err, &notFound) {
+		t.Fatalf("create err = %v, want CodeSigningConfigNotFoundException", err)
+	}
+
+	_, err = c.GetFunction(ctx, &awslambda.GetFunctionInput{FunctionName: aws.String("signed")})
+
+	var rnf *lambdatypes.ResourceNotFoundException
+	if !errors.As(err, &rnf) {
+		t.Fatalf("GetFunction after failed create err = %v, want ResourceNotFoundException (rolled back)", err)
+	}
+
+	in.CodeSigningConfigArn = nil
+	if _, err := c.CreateFunction(ctx, in); err != nil {
+		t.Fatalf("retry create err = %v, want success", err)
+	}
+
+	// The standalone PutFunctionCodeSigningConfig hits the same race and reports
+	// the config's error, not the function's ResourceNotFoundException.
+	csc2, err := c.CreateCodeSigningConfig(ctx, &awslambda.CreateCodeSigningConfigInput{
+		AllowedPublishers: &lambdatypes.AllowedPublishers{
+			SigningProfileVersionArns: []string{"arn:aws:signer:us-east-1:123456789012:/signing-profiles/p/abc"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = c.PutFunctionCodeSigningConfig(ctx, &awslambda.PutFunctionCodeSigningConfigInput{
+		FunctionName: aws.String("signed"), CodeSigningConfigArn: csc2.CodeSigningConfig.CodeSigningConfigArn,
+	})
+	if !errors.As(err, &notFound) {
+		t.Fatalf("put err = %v, want CodeSigningConfigNotFoundException", err)
 	}
 }

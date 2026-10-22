@@ -178,7 +178,13 @@ func (h *Handler) putFunctionCodeSigningConfig(
 	}
 
 	if err := csm.PutFunctionCodeSigningConfig(r.Context(), name, req.CodeSigningConfigArn); err != nil {
-		writeErr(w, err)
+		// A config deleted since the check above is still the config's
+		// CodeSigningConfigNotFoundException, not the function's
+		// ResourceNotFoundException.
+		if h.checkCodeSigningConfigExists(w, r, req.CodeSigningConfigArn) {
+			writeErr(w, err)
+		}
+
 		return
 	}
 
