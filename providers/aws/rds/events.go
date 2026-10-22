@@ -66,6 +66,10 @@ func (m *Mock) CreateEventSubscription(ctx context.Context, cfg rdsdriver.EventS
 		CreatedAt:       m.opts.Clock.Now().UTC(),
 	}
 	m.eventSubs.Set(cfg.Name, sub)
+	// The subscription's tags live beside it, keyed by its ARN, so
+	// Add/Remove/ListTagsForResource on the "es:" ARN work (Terraform's
+	// aws_db_event_subscription reads them back after create).
+	m.setGroupTags(sub.ARN, copyTags(cfg.Tags))
 
 	out := sub
 
@@ -155,6 +159,7 @@ func (m *Mock) DeleteEventSubscription(_ context.Context, name string) (*rdsdriv
 	}
 
 	m.eventSubs.Delete(name)
+	m.setGroupTags(sub.ARN, nil)
 
 	out := sub
 

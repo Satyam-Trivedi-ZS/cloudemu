@@ -244,20 +244,15 @@ func (h *Handler) describeEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sourceType, sourceID := r.Form.Get("SourceType"), r.Form.Get("SourceIdentifier")
-	if code, msg := validateEventSource(sourceType, sourceID); code != "" {
-		awsquery.WriteXMLError(w, http.StatusBadRequest, code, msg)
+	input, field, ok := describeEventsInput(r.Form)
+	if !ok {
+		awsquery.WriteXMLError(w, http.StatusBadRequest, "InvalidParameterValue",
+			"Invalid value for parameter "+field)
+
 		return
 	}
 
-	events, err := store.DescribeEvents(r.Context(), rdsdriver.DescribeEventsInput{
-		SourceType:       sourceType,
-		SourceIdentifier: sourceID,
-		EventCategories:  awsquery.ListStrings(r.Form, "EventCategories.EventCategory"),
-		StartTime:        parseEventTime(r.Form.Get("StartTime")),
-		EndTime:          parseEventTime(r.Form.Get("EndTime")),
-		Duration:         formInt(r.Form.Get("Duration")),
-	})
+	events, err := store.DescribeEvents(r.Context(), input)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -316,34 +311,6 @@ func (h *Handler) describeEventCategories(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// eventSourceTypes are DescribeEvents' valid SourceType values (DescribeEvents
-// API reference, SourceType "Valid Values").
-//
-//nolint:gochecknoglobals // static lookup table
-var eventSourceTypes = map[string]struct{}{
-	"db-instance": {}, "db-parameter-group": {}, "db-security-group": {}, "db-snapshot": {},
-	"db-cluster": {}, "db-cluster-snapshot": {}, "custom-engine-version": {}, "db-proxy": {},
-	"blue-green-deployment": {}, "db-shard-group": {}, "zero-etl": {},
-}
-
-// validateEventSource checks DescribeEvents' SourceType / SourceIdentifier: the
-// type must be one of the documented values, and "If SourceIdentifier is
-// supplied, SourceType must also be provided" (DescribeEvents API reference).
-// It returns the RDS error code and message, or "" when the pair is valid.
-func validateEventSource(sourceType, sourceID string) (code, msg string) {
-	if sourceType != "" {
-		if _, ok := eventSourceTypes[sourceType]; !ok {
-			return "InvalidParameterValue", "Invalid source type: " + sourceType
-		}
-	}
-
-	if sourceID != "" && sourceType == "" {
-		return "InvalidParameterCombination", "SourceType must be provided when SourceIdentifier is specified"
-	}
-
-	return "", ""
-}
-
 // DescribeEvents MaxRecords bounds: "Default: 100. Constraints: Minimum 20,
 // maximum 100." (DescribeEvents API reference).
 const (
@@ -374,21 +341,59 @@ func describeEventsMaxRecords(raw string) (int, bool) {
 //nolint:gochecknoglobals // static lookup table
 var eventTimeLayouts = []string{time.RFC3339Nano, "2006-01-02T15:04Z07:00", "2006-01-02T15:04", time.DateOnly}
 
-// parseEventTime parses an optional DescribeEvents timestamp. An absent or
-// unparseable value yields the zero time, meaning "no bound", mirroring
-// parseRestoreTime.
-func parseEventTime(v string) time.Time {
+// describeEventsInput decodes DescribeEvents' filters from the form. It
+// returns the name of the first malformed field (a StartTime/EndTime that is
+// not an ISO 8601 timestamp, or a non-integer Duration) and false, so the
+// caller answers InvalidParameterValue as real RDS does instead of silently
+// widening the window. The SourceType / SourceIdentifier rules are business
+// rules and are enforced by the provider.
+func describeEventsInput(form url.Values) (rdsdriver.DescribeEventsInput, string, bool) {
+	start, ok := parseEventTime(form.Get("StartTime"))
+	if !ok {
+		return rdsdriver.DescribeEventsInput{}, "StartTime", false
+	}
+
+	end, ok := parseEventTime(form.Get("EndTime"))
+	if !ok {
+		return rdsdriver.DescribeEventsInput{}, "EndTime", false
+	}
+
+	duration := 0
+
+	if raw := form.Get("Duration"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			return rdsdriver.DescribeEventsInput{}, "Duration", false
+		}
+
+		duration = n
+	}
+
+	return rdsdriver.DescribeEventsInput{
+		SourceType:       form.Get("SourceType"),
+		SourceIdentifier: form.Get("SourceIdentifier"),
+		EventCategories:  awsquery.ListStrings(form, "EventCategories.EventCategory"),
+		StartTime:        start,
+		EndTime:          end,
+		Duration:         duration,
+	}, "", true
+}
+
+// parseEventTime parses an optional DescribeEvents timestamp. An absent value
+// yields the zero time ("no bound") and true; a value in none of the accepted
+// layouts yields false.
+func parseEventTime(v string) (time.Time, bool) {
 	if v == "" {
-		return time.Time{}
+		return time.Time{}, true
 	}
 
 	for _, layout := range eventTimeLayouts {
 		if t, err := time.Parse(layout, v); err == nil {
-			return t
+			return t, true
 		}
 	}
 
-	return time.Time{}
+	return time.Time{}, false
 }
 
 // enabledDefaultTrue reads the Enabled flag, defaulting to true when the field

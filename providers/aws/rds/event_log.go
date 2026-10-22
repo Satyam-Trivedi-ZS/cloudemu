@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	cerrors "github.com/stackshy/cloudemu/v2/errors"
 	snsdriver "github.com/stackshy/cloudemu/v2/services/notification/driver"
 	rdsdriver "github.com/stackshy/cloudemu/v2/services/relationaldb/driver"
 )
@@ -294,13 +295,51 @@ func (m *Mock) recordEvent(src eventSource, spec eventSpec, args ...any) {
 	m.flushEventNotifications()
 }
 
+// eventSourceTypes are DescribeEvents' valid SourceType values (DescribeEvents
+// API reference, SourceType "Valid Values").
+//
+//nolint:gochecknoglobals // static lookup table
+var eventSourceTypes = map[string]struct{}{
+	"db-instance": {}, "db-parameter-group": {}, "db-security-group": {}, "db-snapshot": {},
+	"db-cluster": {}, "db-cluster-snapshot": {}, "custom-engine-version": {}, "db-proxy": {},
+	"blue-green-deployment": {}, "db-shard-group": {}, "zero-etl": {},
+}
+
+// errSourceIdentifierWithoutType is the message for a DescribeEvents
+// SourceIdentifier given without a SourceType. The wire handler maps an
+// InvalidArgument carrying the "must also be provided" wording to
+// InvalidParameterCombination, the fault real RDS returns.
+const errSourceIdentifierWithoutType = "If SourceIdentifier is supplied, SourceType must also be provided."
+
+// validateEventSource checks DescribeEvents' SourceType / SourceIdentifier: the
+// type must be one of the documented values, and "If SourceIdentifier is
+// supplied, SourceType must also be provided" (DescribeEvents API reference).
+func validateEventSource(sourceType, sourceID string) error {
+	if sourceType != "" {
+		if _, ok := eventSourceTypes[sourceType]; !ok {
+			return cerrors.New(cerrors.InvalidArgument, "Invalid source type: "+sourceType)
+		}
+	}
+
+	if sourceID != "" && sourceType == "" {
+		return cerrors.New(cerrors.InvalidArgument, errSourceIdentifierWithoutType)
+	}
+
+	return nil
+}
+
 // DescribeEvents returns the recorded events matching the input's filters,
 // oldest first. The time window defaults to the past 60 minutes (or Duration
 // minutes) ending at EndTime (default now), and never reaches back further
-// than the 14-day retention window.
+// than the 14-day retention window. An unknown SourceType, or a
+// SourceIdentifier without a SourceType, is rejected with InvalidArgument.
 //
 //nolint:gocritic // input matches the driver interface signature.
 func (m *Mock) DescribeEvents(_ context.Context, input rdsdriver.DescribeEventsInput) ([]rdsdriver.Event, error) {
+	if err := validateEventSource(input.SourceType, input.SourceIdentifier); err != nil {
+		return nil, err
+	}
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 

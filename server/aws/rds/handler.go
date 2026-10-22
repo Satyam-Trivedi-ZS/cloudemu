@@ -396,7 +396,7 @@ func writeErr(w http.ResponseWriter, err error) {
 	case cerrors.IsAlreadyExists(err):
 		awsquery.WriteXMLError(w, http.StatusBadRequest, alreadyExistsCode(err), msg)
 	case cerrors.IsInvalidArgument(err):
-		awsquery.WriteXMLError(w, http.StatusBadRequest, "InvalidParameterValue", msg)
+		awsquery.WriteXMLError(w, http.StatusBadRequest, invalidArgumentCode(err), msg)
 	case cerrors.IsFailedPrecondition(err):
 		awsquery.WriteXMLError(w, http.StatusBadRequest, invalidStateCode(err), msg)
 	default:
@@ -489,6 +489,22 @@ var invalidStateFaults = []faultMapping{
 	{"option group", "InvalidOptionGroupStateFault"},
 	{"DB cluster", "InvalidDBClusterStateFault"},
 	{"DB instance", "InvalidDBInstanceState"},
+}
+
+// invalidArgumentFaults maps an invalid-argument error to the AWS-shaped fault
+// code. A rule that one parameter requires another ("X is supplied, Y must
+// also be provided") is InvalidParameterCombination in real RDS; every other
+// invalid argument is InvalidParameterValue.
+//
+//nolint:gochecknoglobals // ordered static lookup table
+var invalidArgumentFaults = []faultMapping{
+	{"must also be provided", "InvalidParameterCombination"},
+}
+
+// invalidArgumentCode picks the AWS-shaped invalid-argument fault from the
+// message.
+func invalidArgumentCode(err error) string {
+	return matchFault(err.Error(), invalidArgumentFaults, "InvalidParameterValue")
 }
 
 // notFoundCode picks the AWS-shaped NotFound fault from the error message.
