@@ -587,7 +587,8 @@ func NewFromProvider(p *awsprovider.Provider) *server.Server {
 // non-nil driver in d. Handlers are registered most-specific-first so the
 // dispatch is unambiguous:
 //
-//   - CloudWatch matches on Smithy-Protocol: rpc-v2-cbor header.
+//   - Keyspaces rpc-v2-cbor matches its own /service/KeyspacesService/ path;
+//     CloudWatch then matches any other Smithy-Protocol: rpc-v2-cbor request.
 //   - DynamoDB matches on X-Amz-Target header (JSON-RPC).
 //   - RDS matches form-encoded POSTs whose Action is one of the known RDS
 //     operations. It must register before EC2 because both speak the AWS
@@ -656,6 +657,14 @@ func newServer(d Drivers) (*server.Server, authzSets) {
 	// and reject as InvalidAction; and before the control plane, EKS and S3.
 	if d.BedrockAgentRuntime != nil {
 		srv.Register(bedrockagentruntime.New(d.BedrockAgentRuntime))
+	}
+
+	// Keyspaces rpc-v2-cbor (aws-sdk-go-v2/service/keyspaces v1.37.0+, so
+	// hashicorp/aws 6.69+) matches only /service/KeyspacesService/operation/*.
+	// It registers before CloudWatch, which claims every other rpc-v2-cbor
+	// request under /service/. The AWS JSON 1.0 handler registers below.
+	if d.Keyspaces != nil {
+		srv.Register(keyspacessrv.NewCBOR(d.Keyspaces))
 	}
 
 	if d.CloudWatch != nil {
