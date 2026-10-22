@@ -132,17 +132,18 @@ type getRecordsRequest struct {
 
 func (h *Handler) getRecords(w http.ResponseWriter, r *http.Request) {
 	dispatch(h, w, r, func(h *Handler, ctx context.Context, req *getRecordsRequest) (any, error) {
-		// The driver reads a zero limit as "Limit omitted" (the 10,000 default),
-		// so an explicitly sent Limit of 0, which is below the 1..10000 range,
-		// is the one value it cannot see; reject that wire shape here with the
-		// same InvalidArgumentException the driver returns for other values.
+		// The driver reads a zero limit as "Limit omitted" (the default) and
+		// enforces the 1..MaxGetRecordsLimit range for every other value, so an
+		// explicitly sent Limit of 0 is the one wire shape it cannot see; reject
+		// just that here with the same InvalidArgumentException and bound.
 		var limit int32
 
 		if req.Limit != nil {
 			if *req.Limit == 0 {
 				return nil, &kinesisdriver.APIError{
 					Exception: kinesisdriver.ExInvalidArgument,
-					Err:       cerrors.Newf(cerrors.InvalidArgument, "Limit 0 is invalid: it must be between 1 and 10000"),
+					Err: cerrors.Newf(cerrors.InvalidArgument,
+						"Limit 0 is invalid: it must be between 1 and %d", kinesisdriver.MaxGetRecordsLimit),
 				}
 			}
 

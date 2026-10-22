@@ -29,6 +29,11 @@ const (
 	EncryptionKMS  = "KMS"
 )
 
+// MaxGetRecordsLimit is the upper bound of GetRecords' Limit (valid range
+// 1..10000) and the number of records returned when Limit is omitted. It is
+// shared by implementations and wire layers so the bound can't drift.
+const MaxGetRecordsLimit = 10000
+
 // Shard iterator types.
 const (
 	IteratorAtSequenceNumber    = "AT_SEQUENCE_NUMBER"

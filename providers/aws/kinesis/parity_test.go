@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -346,5 +347,195 @@ func TestSubscribeToShardSignalsShardEnd(t *testing.T) {
 
 	if len(res.Records) != 1 || res.ContinuationSequenceNumber != "" || len(res.ChildShards) != 2 {
 		t.Fatalf("closed-shard event = %+v, want 1 record, empty continuation, 2 child shards", res)
+	}
+}
+
+// TestRecreateDuringConcurrentReapKeepsNewStream races readers that reap an
+// expired DELETING stream against a CreateStream that reaps the same entry and
+// installs a new stream under the name. The reader's purge must never remove
+// the new stream (or its ARN index entry) once CreateStream has returned nil.
+func TestRecreateDuringConcurrentReapKeepsNewStream(t *testing.T) {
+	ctx := context.Background()
+	m, clk := newSettleMock(t)
+
+	const (
+		rounds  = 10000
+		readers = 4
+	)
+
+	for round := range rounds {
+		if err := m.CreateStream(ctx, driver.CreateStreamInput{StreamName: "s", ShardCount: 1}); err != nil {
+			t.Fatalf("round %d: CreateStream: %v", round, err)
+		}
+
+		clk.Advance(3 * time.Second)
+
+		if err := m.DeleteStream(ctx, "s", "", false); err != nil {
+			t.Fatalf("round %d: DeleteStream: %v", round, err)
+		}
+
+		// The deletion has settled but nothing has purged the entry yet.
+		clk.Advance(3 * time.Second)
+
+		var (
+			wg        sync.WaitGroup
+			createErr error
+			start     = make(chan struct{})
+		)
+
+		for range readers {
+			wg.Go(func() {
+				<-start
+
+				_, _ = m.DescribeStreamSummary(ctx, "s", "")
+			})
+		}
+
+		wg.Go(func() {
+			<-start
+
+			createErr = m.CreateStream(ctx, driver.CreateStreamInput{StreamName: "s", ShardCount: 1})
+		})
+
+		close(start)
+		wg.Wait()
+
+		if createErr != nil {
+			t.Fatalf("round %d: re-create: %v", round, createErr)
+		}
+
+		sum, err := m.DescribeStreamSummary(ctx, "s", "")
+		if err != nil {
+			t.Fatalf("round %d: re-created stream lost by name: %v", round, err)
+		}
+
+		if _, err := m.DescribeStreamSummary(ctx, "", sum.StreamARN); err != nil {
+			t.Fatalf("round %d: re-created stream lost by ARN: %v", round, err)
+		}
+
+		// Let the re-created stream settle to ACTIVE, then clear it for the next round.
+		clk.Advance(3 * time.Second)
+
+		if err := m.DeleteStream(ctx, "s", "", false); err != nil {
+			t.Fatalf("round %d: cleanup DeleteStream: %v", round, err)
+		}
+
+		clk.Advance(3 * time.Second)
+
+		if _, err := m.DescribeStreamSummary(ctx, "s", ""); !cerrors.IsNotFound(err) {
+			t.Fatalf("round %d: cleanup: stream still present: %v", round, err)
+		}
+	}
+}
+
+// TestControlPlaneOpsRequireActiveUnderAsyncSettle checks that the stream-level
+// control-plane operations whose API reference lists ResourceInUseException
+// ("the resource must be in the ACTIVE state") reject a CREATING or DELETING
+// stream, and succeed once it is ACTIVE.
+func TestControlPlaneOpsRequireActiveUnderAsyncSettle(t *testing.T) {
+	ctx := context.Background()
+
+	ops := map[string]func(m *kinesis.Mock, arn string) error{
+		"UpdateShardCount": func(m *kinesis.Mock, _ string) error {
+			_, _, err := m.UpdateShardCount(ctx, "s", "", 2, "UNIFORM_SCALING")
+			return err
+		},
+		"IncreaseStreamRetentionPeriod": func(m *kinesis.Mock, _ string) error {
+			return m.IncreaseStreamRetentionPeriod(ctx, "s", "", 48)
+		},
+		"DecreaseStreamRetentionPeriod": func(m *kinesis.Mock, _ string) error {
+			return m.DecreaseStreamRetentionPeriod(ctx, "s", "", 24)
+		},
+		"UpdateStreamMode": func(m *kinesis.Mock, arn string) error {
+			return m.UpdateStreamMode(ctx, arn, driver.ModeProvisioned)
+		},
+		"StartStreamEncryption": func(m *kinesis.Mock, _ string) error {
+			return m.StartStreamEncryption(ctx, "s", "", driver.EncryptionKMS, "alias/aws/kinesis")
+		},
+		"StopStreamEncryption": func(m *kinesis.Mock, _ string) error {
+			return m.StopStreamEncryption(ctx, "s", "", driver.EncryptionKMS, "alias/aws/kinesis")
+		},
+		"SplitShard": func(m *kinesis.Mock, _ string) error {
+			return m.SplitShard(ctx, "s", "", "shardId-000000000000", "1000")
+		},
+		"MergeShards": func(m *kinesis.Mock, _ string) error {
+			return m.MergeShards(ctx, "s", "", "shardId-000000000000", "shardId-000000000001")
+		},
+	}
+
+	for name, op := range ops {
+		t.Run(name, func(t *testing.T) {
+			m, clk := newSettleMock(t)
+
+			if err := m.CreateStream(ctx, driver.CreateStreamInput{StreamName: "s", ShardCount: 2}); err != nil {
+				t.Fatalf("CreateStream: %v", err)
+			}
+
+			sum, err := m.DescribeStreamSummary(ctx, "s", "")
+			if err != nil {
+				t.Fatalf("DescribeStreamSummary: %v", err)
+			}
+
+			if err := op(m, sum.StreamARN); !cerrors.IsFailedPrecondition(err) {
+				t.Fatalf("%s while CREATING = %v, want ResourceInUse", name, err)
+			}
+
+			clk.Advance(2 * time.Second)
+
+			if err := op(m, sum.StreamARN); err != nil {
+				t.Fatalf("%s while ACTIVE: %v", name, err)
+			}
+
+			if err := m.DeleteStream(ctx, "s", "", false); err != nil {
+				t.Fatalf("DeleteStream: %v", err)
+			}
+
+			if err := op(m, sum.StreamARN); !cerrors.IsFailedPrecondition(err) {
+				t.Fatalf("%s while DELETING = %v, want ResourceInUse", name, err)
+			}
+		})
+	}
+}
+
+// TestSnapshotOmitsArnIndexOfDeletingStream checks that a stream left out of a
+// snapshot because it is DELETING takes its ARN index entry with it, while a
+// live stream's entry still round-trips and resolves after a restore.
+func TestSnapshotOmitsArnIndexOfDeletingStream(t *testing.T) {
+	ctx := context.Background()
+	m, clk := newSettleMock(t)
+
+	for _, name := range []string{"gone", "kept"} {
+		if err := m.CreateStream(ctx, driver.CreateStreamInput{StreamName: name, ShardCount: 1}); err != nil {
+			t.Fatalf("CreateStream %s: %v", name, err)
+		}
+	}
+
+	clk.Advance(2 * time.Second)
+
+	if err := m.DeleteStream(ctx, "gone", "", false); err != nil {
+		t.Fatalf("DeleteStream: %v", err)
+	}
+
+	raw, err := m.Snapshot(ctx, false)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	if strings.Contains(string(raw), "stream/gone") {
+		t.Fatalf("snapshot still carries the DELETING stream's ARN index entry: %s", raw)
+	}
+
+	restored := kinesis.New(config.NewOptions())
+	if err := restored.Restore(ctx, raw); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	sum, err := m.DescribeStreamSummary(ctx, "kept", "")
+	if err != nil {
+		t.Fatalf("DescribeStreamSummary: %v", err)
+	}
+
+	if _, err := restored.DescribeStreamSummary(ctx, "", sum.StreamARN); err != nil {
+		t.Fatalf("restored stream not resolvable by ARN: %v", err)
 	}
 }

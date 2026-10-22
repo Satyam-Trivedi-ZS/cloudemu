@@ -52,7 +52,14 @@ type shardStateSnapshot struct {
 func (m *Mock) Snapshot(_ context.Context, _ bool) (json.RawMessage, error) {
 	snap := kinesisSnapshot{Streams: m.snapshotStreams()}
 
-	arns, err := m.arnToName.Snapshot()
+	// Serialize only the index entries of streams that are being captured, so a
+	// stream left out (one already DELETING) doesn't leave a dangling ARN entry
+	// pointing at a name the restored state doesn't have. The shape is the same
+	// map[arn]name memstore.Snapshot emits, so Restore's LoadSnapshot reads it.
+	arns, err := json.Marshal(m.arnToName.Filter(func(_, name string) bool {
+		_, kept := snap.Streams[name]
+		return kept
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("kinesis: snapshot arn index: %w", err)
 	}

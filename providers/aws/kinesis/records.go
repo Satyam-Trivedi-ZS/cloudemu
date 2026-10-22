@@ -17,7 +17,7 @@ const (
 	// defaultGetRecordsLimit is both the GetRecords default and its maximum
 	// Limit: real Kinesis documents Limit's valid range as 1..10000 and throws
 	// InvalidArgumentException for a value above 10,000.
-	defaultGetRecordsLimit = 10000
+	defaultGetRecordsLimit = driver.MaxGetRecordsLimit
 	// maxPartitionKeyLen is the PartitionKey length cap (Unicode characters)
 	// on PutRecord and every PutRecords entry.
 	maxPartitionKeyLen = 256
@@ -86,6 +86,22 @@ func partitionKeyLengthError(violations []string) error {
 func partitionKeyViolation(key, path string) string {
 	return fmt.Sprintf("Value '%s' at '%s' failed to satisfy constraint: "+
 		"Member must have length less than or equal to %d", key, path, maxPartitionKeyLen)
+}
+
+// validatePutRecordsRequest applies the request-level PutRecords checks that
+// need no stream state: the 1..500 record count and the per-entry PartitionKey
+// length. Any failure rejects the whole request before a record is written.
+func validatePutRecordsRequest(entries []driver.PutRecordsRequestEntry) error {
+	if len(entries) == 0 {
+		return invalidArg("Records must contain at least one entry")
+	}
+
+	if len(entries) > maxBatchRecords {
+		return invalidArg("a PutRecords request may contain at most %d records, got %d",
+			maxBatchRecords, len(entries))
+	}
+
+	return validateBatchPartitionKeys(entries)
 }
 
 // validateBatchPartitionKeys rejects the whole PutRecords request when any
@@ -217,16 +233,7 @@ func (m *Mock) PutRecords(
 ) ([]driver.PutRecordsResultEntry, int32, error) {
 	start := m.now()
 
-	if len(entries) == 0 {
-		return nil, 0, invalidArg("Records must contain at least one entry")
-	}
-
-	if len(entries) > maxBatchRecords {
-		return nil, 0, invalidArg("a PutRecords request may contain at most %d records, got %d",
-			maxBatchRecords, len(entries))
-	}
-
-	if err := validateBatchPartitionKeys(entries); err != nil {
+	if err := validatePutRecordsRequest(entries); err != nil {
 		return nil, 0, err
 	}
 
