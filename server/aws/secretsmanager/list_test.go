@@ -74,6 +74,33 @@ func TestSDKListSecretsNegationFilter(t *testing.T) {
 		t.Fatalf("name=!prod returned %v, want [dev-db]", got)
 	}
 
+	// Values in one filter are OR'd, negated ones included (AWS documents no
+	// other combination, and moto behaves the same): every name fails at least
+	// one of the two prefixes, so both secrets match. Excluding both prefixes
+	// takes two filters, which are AND'd.
+	out, err = client.ListSecrets(ctx, &awssm.ListSecretsInput{
+		Filters: []smtypes.Filter{{Key: smtypes.FilterNameStringTypeName, Values: []string{"!prod", "!dev"}}},
+	})
+	if err != nil {
+		t.Fatalf("ListSecrets: %v", err)
+	}
+
+	if len(out.SecretList) != 2 {
+		t.Fatalf("name=[!prod,!dev] returned %v, want both secrets", secretNames(out.SecretList))
+	}
+
+	out, err = client.ListSecrets(ctx, &awssm.ListSecretsInput{Filters: []smtypes.Filter{
+		{Key: smtypes.FilterNameStringTypeName, Values: []string{"!prod"}},
+		{Key: smtypes.FilterNameStringTypeName, Values: []string{"!dev"}},
+	}})
+	if err != nil {
+		t.Fatalf("ListSecrets: %v", err)
+	}
+
+	if len(out.SecretList) != 0 {
+		t.Fatalf("name=!prod AND name=!dev returned %v, want none", secretNames(out.SecretList))
+	}
+
 	// No secret here is owned by another service, so "!rds" keeps them all.
 	out, err = client.ListSecrets(ctx, &awssm.ListSecretsInput{
 		Filters: []smtypes.Filter{{Key: smtypes.FilterNameStringTypeOwningService, Values: []string{"!rds"}}},
