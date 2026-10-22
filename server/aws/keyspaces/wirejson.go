@@ -32,18 +32,22 @@ func writeJSON(w http.ResponseWriter, v any) {
 	wire.WriteJSON(w, lowerCamelKeys(decoded))
 }
 
-// omitEmptyEnum reports whether key names an SDK member whose Go type is a
-// non-pointer string enum, which encoding/json renders as "" when unset. Real
-// Keyspaces omits these members when unset (e.g. cdcSpecification.viewType on
-// a table without a CDC stream), so an empty value is dropped rather than sent
-// as "".
+// omitEmptyEnum reports whether an empty value should be dropped because real
+// Keyspaces omits the member when it is unset. It covers only
+// cdcSpecification.viewType: the SDK models it as a non-pointer string enum, so
+// encoding/json renders it as "" on a table without a CDC stream. In the
+// Keyspaces SDK, ViewType appears only on CdcSpecification and
+// CdcSpecificationSummary, so matching the key name is enough. This is not a
+// general rule for empty strings: the decoded map no longer carries Go types,
+// so a general rule would also drop non-enum members that are legitimately
+// empty. Add another unset enum here by name if one turns up.
 func omitEmptyEnum(key string, val any) bool {
 	return key == "ViewType" && val == ""
 }
 
 // lowerCamelKeys returns v with the first letter of every map key lowercased,
-// recursively. It also drops null values, unset string enums (see
-// omitEmptyEnum), and the SDK's always-empty resultMetadata envelope so the
+// recursively. It also drops null values, an unset cdcSpecification.viewType
+// (see omitEmptyEnum), and the SDK's always-empty resultMetadata envelope so the
 // response carries only meaningful fields.
 func lowerCamelKeys(v any) any {
 	switch t := v.(type) {

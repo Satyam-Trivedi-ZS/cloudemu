@@ -42,6 +42,10 @@ const (
 	maxResourceARNLen = 1000
 	maxTagKeyLen      = 128
 	maxTagValueLen    = 256
+	// maxTagListLen is the documented TagList maximum (Array Members: Maximum
+	// number of 60 items) on TagResource, UntagResource, CreateKeyspace,
+	// CreateTable and RestoreTable.
+	maxTagListLen     = 60
 	reservedTagPrefix = "aws:"
 	arnResourceMarker = ":/keyspace/"
 	arnTableSegment   = "table"
@@ -50,8 +54,12 @@ const (
 // validateTags applies the documented Amazon Keyspaces tag restrictions: key
 // 1-128 and value 1-256 Unicode characters (a value can't be empty), only
 // letters, white space, numbers and + - = . _ : /, and no user-assigned keys
-// with the reserved "aws:" prefix.
+// with the reserved "aws:" prefix. A request carries at most 60 tags.
 func validateTags(tags map[string]string) error {
+	if len(tags) > maxTagListLen {
+		return cerrors.Newf(cerrors.InvalidArgument, "tags must contain at most %d items", maxTagListLen)
+	}
+
 	for k, v := range tags {
 		if n := utf8.RuneCountInString(k); n == 0 || n > maxTagKeyLen {
 			return cerrors.Newf(cerrors.InvalidArgument, "tag key %q must be 1-%d characters", k, maxTagKeyLen)
@@ -158,6 +166,10 @@ func (m *Mock) TagResource(_ context.Context, arn string, tags map[string]string
 func (m *Mock) UntagResource(_ context.Context, arn string, keys []string) error {
 	if len(keys) == 0 {
 		return cerrors.New(cerrors.InvalidArgument, "tags must contain at least one tag")
+	}
+
+	if len(keys) > maxTagListLen {
+		return cerrors.Newf(cerrors.InvalidArgument, "tags must contain at most %d items", maxTagListLen)
 	}
 
 	for _, k := range keys {

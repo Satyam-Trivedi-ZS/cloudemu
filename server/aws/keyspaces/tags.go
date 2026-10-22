@@ -74,7 +74,9 @@ func (h *Handler) listTagsForResource(w http.ResponseWriter, r *http.Request) {
 
 // maxTagListLen is the documented TagList maximum (Array Members: Maximum
 // number of 60 items) on TagResource, UntagResource, CreateKeyspace,
-// CreateTable and RestoreTable.
+// CreateTable and RestoreTable. The provider applies the same bound to the
+// tags it receives; this check runs on the raw wire list, which can repeat a
+// key and so be longer than the map the provider sees.
 const maxTagListLen = 60
 
 // rejectTagListTooLong writes a ValidationException and returns true when a
