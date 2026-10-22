@@ -104,7 +104,16 @@ type Mock struct {
 	// secrets holds each connection's credentials; nil leaves SecretArn a bare
 	// identifier.
 	secrets ConnectionSecretStore
-	replays *memstore.Store[driver.Replay]
+
+	// httpClient calls API destination targets; tokens caches each OAuth
+	// connection's access token and limiter enforces each destination's
+	// invocation rate. None of them is held locked during a call.
+	httpClient HTTPDoer
+	tokens     tokenCache
+	limiter    rateLimiter
+	// apiDestSlots bounds how many API destination deliveries run at once.
+	apiDestSlots chan struct{}
+	replays      *memstore.Store[driver.Replay]
 	// activeReplays counts replays currently delivering, bounded by
 	// maxActiveReplays.
 	activeReplays atomic.Int32
@@ -159,6 +168,8 @@ func New(opts *config.Options) *Mock {
 
 		connections:     memstore.New[connectionData](),
 		apiDestinations: memstore.New[driver.APIDestination](),
+		httpClient:      defaultHTTPClient(),
+		apiDestSlots:    make(chan struct{}, maxAPIDestinationDeliveries),
 	}
 
 	// Create the default event bus automatically.
@@ -330,8 +341,8 @@ func (m *Mock) PutRule(_ context.Context, cfg *driver.RuleConfig) (*driver.Rule,
 		targets: memstore.New[driver.Target](),
 	}
 
-	for _, t := range rule.Targets {
-		rd.targets.Set(t.ID, t)
+	for i := range rule.Targets {
+		rd.targets.Set(rule.Targets[i].ID, rule.Targets[i])
 	}
 
 	bd.rules.Set(cfg.Name, rd)
@@ -468,8 +479,8 @@ func (m *Mock) PutTargets(_ context.Context, eventBus, ruleName string, targets 
 		return errors.Newf(errors.NotFound, "rule %q not found on event bus %q", ruleName, busName)
 	}
 
-	for _, t := range targets {
-		rd.targets.Set(t.ID, t)
+	for i := range targets {
+		rd.targets.Set(targets[i].ID, targets[i])
 	}
 
 	rd.rule.Targets = targetsFromStore(rd.targets)
@@ -602,14 +613,41 @@ func (m *Mock) deliverEnvelope(ctx context.Context, matched []driver.Rule, event
 
 // deliverToTarget dispatches one target and, on failure, routes the original
 // event to the target's dead-letter queue when one is configured.
+//
+// An API destination target is called over HTTP in the background (see
+// goDeliverAPIDestination), so a slow or rate-limited endpoint never holds up
+// the PutEvents caller. Every other target is dispatched in line.
 func (m *Mock) deliverToTarget(
 	ctx context.Context, rule *driver.Rule, t *driver.Target, busName string, envelope []byte, reserved map[string]json.RawMessage,
 ) {
-	if m.dispatchTarget(ctx, t.ARN, targetBody(t, envelope, reserved)) {
+	body := targetBody(t, envelope, reserved)
+
+	if isAPIDestination(t.ARN) {
+		target, ruleName := *t, rule.Name
+		// The delivery outlives the PutEvents request, whose context the HTTP
+		// server cancels once the handler returns.
+		bgCtx := context.WithoutCancel(ctx)
+
+		m.goDeliverAPIDestination(func() {
+			if !m.dispatchAPIDestination(bgCtx, &target, body) {
+				m.deadLetter(bgCtx, ruleName, &target, busName, envelope)
+			}
+		})
+
 		return
 	}
 
-	dims := map[string]string{"RuleName": rule.Name, busDimension: busName}
+	if m.dispatchTarget(ctx, t.ARN, body) {
+		return
+	}
+
+	m.deadLetter(ctx, rule.Name, t, busName, envelope)
+}
+
+// deadLetter records a failed delivery and sends the original event to the
+// target's dead-letter queue when one is configured.
+func (m *Mock) deadLetter(ctx context.Context, ruleName string, t *driver.Target, busName string, envelope []byte) {
+	dims := map[string]string{"RuleName": ruleName, busDimension: busName}
 	m.emitMetric(ctx, "FailedInvocations", 1, dims)
 
 	dlqARN := deadLetterARN(t.DeadLetterConfig)
@@ -851,8 +889,8 @@ func targetsFromStore(store *memstore.Store[driver.Target]) []driver.Target {
 	all := store.All()
 
 	targets := make([]driver.Target, 0, len(all))
-	for _, t := range all {
-		targets = append(targets, t)
+	for id := range all {
+		targets = append(targets, all[id])
 	}
 
 	return targets
