@@ -11559,6 +11559,62 @@
     ],
     "optionalCapabilities": [
       {
+        "name": "AWSLogging",
+        "doc": "AWSLogging is an optional interface implemented by the AWS CloudWatch Logs",
+        "operations": [
+          {
+            "name": "AssociateKmsKey",
+            "doc": "AssociateKmsKey and DisassociateKmsKey target exactly one of a log group"
+          },
+          {
+            "name": "CreateAWSLogGroup"
+          },
+          {
+            "name": "DeleteRetentionPolicy"
+          },
+          {
+            "name": "DescribeAWSMetricFilters",
+            "doc": "DescribeAWSMetricFilters lists metric filters, sorted by filter name."
+          },
+          {
+            "name": "DescribeQueries"
+          },
+          {
+            "name": "DisassociateKmsKey"
+          },
+          {
+            "name": "GetLogGroupFields",
+            "doc": "GetLogGroupFields samples the 8 minutes either side of at, or the last"
+          },
+          {
+            "name": "GetLogRecord"
+          },
+          {
+            "name": "GetQueryResults"
+          },
+          {
+            "name": "ListAWSLogGroups"
+          },
+          {
+            "name": "PutLogEventsWithResult"
+          },
+          {
+            "name": "PutRetentionPolicy"
+          },
+          {
+            "name": "StartQuery",
+            "doc": "Logs Insights. A query is Running until its first GetQueryResults,"
+          },
+          {
+            "name": "StopQuery"
+          },
+          {
+            "name": "TestMetricFilter",
+            "doc": "TestMetricFilter runs a filter pattern over sample log messages."
+          }
+        ]
+      },
+      {
         "name": "GCPLogging",
         "doc": "GCPLogging is an optional interface implemented by the GCP logging backend for",
         "operations": [

@@ -431,6 +431,9 @@ func newProvider(o *config.Options, shared *GlobalServices) *Provider {
 	p.ElastiCache.SetMonitoring(p.CloudWatch)
 	p.MemoryDB.SetMonitoring(p.CloudWatch)
 	p.CloudWatchLogs.SetMonitoring(p.CloudWatch)
+	// CloudWatch Logs -> KMS: a log group key (CreateLogGroup kmsKeyId,
+	// AssociateKmsKey) must be an existing, enabled KMS key.
+	p.CloudWatchLogs.SetKeyResolver(p.KMS)
 	p.SNS.SetMonitoring(p.CloudWatch)
 	p.ECR.SetMonitoring(p.CloudWatch)
 	p.ECS.SetMonitoring(p.CloudWatch)
@@ -543,6 +546,9 @@ func newProvider(o *config.Options, shared *GlobalServices) *Provider {
 // mocks. It is split out of New so the factory stays within the function-length
 // budget; the wiring-parity test scans this helper as if it were New().
 func wirePostBuildServices(o *config.Options, p *Provider) {
+	// EventBridge connections keep their credentials in a real Secrets Manager
+	// secret (events!connection/<name>/<id>), as AWS does.
+	p.EventBridge.SetConnectionSecretStore(p.SecretsManager)
 	// S3 event notifications deliver to their configured targets: SQS queues,
 	// SNS topics, and Lambda functions.
 	p.S3.SetSQSDeliverer(p.SQS)

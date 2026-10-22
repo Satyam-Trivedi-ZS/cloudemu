@@ -10,6 +10,7 @@
 package eventbridge
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -87,9 +88,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "ListTagsForResource":
 		h.listTagsForResource(w, r)
 	default:
-		wire.WriteJSONError(w, http.StatusBadRequest,
-			"UnknownOperationException", "unknown EventBridge operation: "+op)
+		h.serveExtendedOp(w, r, op)
 	}
+}
+
+// serveExtendedOp serves the operations outside the main switch (archives,
+// replays, connections and API destinations) and answers
+// UnknownOperationException for anything else.
+func (h *Handler) serveExtendedOp(w http.ResponseWriter, r *http.Request, op string) {
+	if h.serveArchiveOp(w, r, op) || h.serveConnectionOp(w, r, op) {
+		return
+	}
+
+	wire.WriteJSONError(w, http.StatusBadRequest,
+		"UnknownOperationException", "unknown EventBridge operation: "+op)
 }
 
 // writeErr maps canonical cloudemu errors to EventBridge JSON error responses.
@@ -102,6 +114,10 @@ func writeErr(w http.ResponseWriter, err error) {
 	msg := cerrors.Message(err)
 
 	switch {
+	case errors.Is(err, ebdriver.ErrInvalidEventPattern):
+		wire.WriteJSONError(w, http.StatusBadRequest, "InvalidEventPatternException", msg)
+	case errors.Is(err, ebdriver.ErrIllegalStatus):
+		wire.WriteJSONError(w, http.StatusBadRequest, "IllegalStatusException", msg)
 	case cerrors.IsNotFound(err):
 		wire.WriteJSONError(w, http.StatusBadRequest, "ResourceNotFoundException", msg)
 	case cerrors.IsAlreadyExists(err):
