@@ -12,6 +12,7 @@ import (
 const (
 	ExTag                             = "TagException"
 	ExInvalidArn                      = "InvalidArnException"
+	ExInvalidMarker                   = "InvalidMarkerException"
 	ExCustomKeyStoreNotFound          = "CustomKeyStoreNotFoundException"
 	ExCustomKeyStoreNameInUse         = "CustomKeyStoreNameInUseException"
 	ExCustomKeyStoreInvalidState      = "CustomKeyStoreInvalidStateException"
