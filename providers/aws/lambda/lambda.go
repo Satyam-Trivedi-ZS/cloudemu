@@ -199,8 +199,14 @@ type versionData struct {
 	awsConfig driver.AWSFunctionConfig
 	// cutWhilePending marks the version CreateFunction(Publish=true) cut while
 	// the function was still Pending creation; it reports Pending until creation
-	// completes. Every other published version is Active/Successful.
+	// completes.
 	cutWhilePending bool
+	// updateWindow is the InProgress window of the update a Publish=true
+	// UpdateFunctionCode cut this version with. Real Lambda reports that version
+	// Pending (reason Creating) until the update completes. It is inactive for
+	// every other version, which is Active/Successful. Like the function's own
+	// settle windows it is not persisted.
+	updateWindow settle.Window
 }
 
 type aliasData struct {
@@ -261,6 +267,20 @@ type funcData struct {
 	// codeSigningConfigARN is the code signing config attached to the function
 	// (PutFunctionCodeSigningConfig), or "" when none is.
 	codeSigningConfigARN string
+	// engineName is the FunctionEngine key the function's current code is
+	// deployed under; "" means the function name. Under AsyncSettle a code update
+	// deploys to a fresh key, so the previous deployment keeps serving
+	// invocations until the update completes (see prior).
+	engineName string
+	// prior is the function as it was before its latest update under
+	// AsyncSettle. Invoke of $LATEST runs it while that update is InProgress,
+	// as real Lambda does. nil until such an update; not persisted, like the
+	// settle windows, so a restored function serves its current revision.
+	prior *priorRevision
+	// retired lists engine keys that no longer serve any invocation. They are
+	// removed at the function's next code update or on delete, the operations
+	// that hold the function's engine reservation.
+	retired []string
 }
 
 // Mock is an in-memory mock implementation of AWS Lambda.
@@ -464,12 +484,21 @@ func (m *Mock) ListFunctions(_ context.Context) ([]driver.FunctionInfo, error) {
 	return infos, nil
 }
 
-// commitUpdate applies cfg to the stored function and writes it back. backed,
-// when set, is the engine state after a code deploy. Callers hold mu.
+// codeDeploy is the outcome of a code update's engine deploy: whether the
+// function is engine-backed afterwards, and the engine key the code went to.
+type codeDeploy struct {
+	backed bool
+	key    string
+}
+
+// commitUpdate applies cfg to the stored function and writes it back. deployed,
+// when set, is the engine state after a code deploy. Under AsyncSettle the
+// function as it was before is kept as fd.prior, which Invoke serves until the
+// update completes. Callers hold mu.
 //
 //nolint:gocritic // hugeParam: cfg is the by-value driver config.
 func (m *Mock) commitUpdate(
-	ctx context.Context, name string, cfg driver.FunctionConfig, backed *bool,
+	ctx context.Context, name string, cfg driver.FunctionConfig, deployed *codeDeploy,
 ) (*driver.FunctionInfo, error) {
 	fd, ok := m.funcs.Get(name)
 	if !ok {
@@ -480,7 +509,7 @@ func (m *Mock) commitUpdate(
 	// creation or a previous update is InProgress (an AsyncSettle window or an
 	// engine deploy), as real Lambda does. A code update was checked when it
 	// reserved the name (reserveCodeUpdate) and is finalized here.
-	if backed == nil {
+	if deployed == nil {
 		if err := m.checkUpdatable(&fd); err != nil {
 			return nil, err
 		}
@@ -491,10 +520,14 @@ func (m *Mock) commitUpdate(
 		return nil, err
 	}
 
+	m.keepPrior(&fd)
 	fd.info = info
 
-	if backed != nil {
-		fd.engineBacked = *backed
+	if deployed != nil {
+		fd.engineBacked = deployed.backed
+		if deployed.backed {
+			fd.engineName = engineNameFor(name, deployed.key)
+		}
 	}
 
 	m.funcs.Set(name, fd)
@@ -557,6 +590,10 @@ func (m *Mock) Invoke(ctx context.Context, input driver.InvokeInput) (*driver.In
 		return nil, err
 	}
 
+	// While an update is InProgress, $LATEST still runs the code and
+	// configuration it had before the update.
+	m.servePrior(&fd, executedVersion)
+
 	// A DryRun validates the function, qualifier, and permissions but runs
 	// nothing and emits no metrics: resolveQualifier above has already rejected
 	// an unknown alias/version with ResourceNotFoundException, so a DryRun that
@@ -610,7 +647,7 @@ func (m *Mock) runInvocation(
 	h := m.resolveHandler(fd, input.FunctionName)
 
 	if h == nil && fd.engineBacked {
-		return m.invokeEngine(ctx, input, dims, executedVersion, start)
+		return m.invokeEngine(ctx, input, fd.engineKey(), dims, executedVersion, start)
 	}
 
 	if h == nil {
@@ -828,13 +865,14 @@ func functionNameFromARN(arn string) string {
 }
 
 // invokeEngine runs a function whose code was deployed to the configured
-// FunctionEngine and records the same metrics as a real handler invocation. A
+// FunctionEngine under engineKey and records the same metrics as a real handler invocation. A
 // handler that raised is reported via out.Error (HTTP stays 200), matching real
 // Lambda's X-Amz-Function-Error semantics.
 func (m *Mock) invokeEngine(
-	ctx context.Context, input driver.InvokeInput, dims map[string]string, executedVersion string, start time.Time,
+	ctx context.Context, input driver.InvokeInput, engineKey string, dims map[string]string,
+	executedVersion string, start time.Time,
 ) (*driver.InvokeOutput, error) {
-	out, err := funcengine.Invoke(ctx, m.opts.FunctionEngine, input.FunctionName, input.Payload)
+	out, err := funcengine.Invoke(ctx, m.opts.FunctionEngine, engineKey, input.Payload)
 	duration := m.durationMillis(start)
 
 	if err != nil {

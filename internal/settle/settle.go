@@ -184,6 +184,16 @@ func (s *Set) Settled(id string, now time.Time) bool {
 	return true
 }
 
+// Window returns id's window, or the inactive zero Window when id has none. It
+// lets a dependent resource share the exact deadline of the window it is tied to
+// (for example a Lambda version cut during an update settles with that update).
+func (s *Set) Window(id string) Window {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.m[id]
+}
+
 // Clear drops id's window (on delete, or when a terminal state is reached and
 // the window is no longer needed). Idempotent.
 func (s *Set) Clear(id string) {

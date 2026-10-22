@@ -90,6 +90,12 @@ func (m *Mock) publishVersion(
 		// the function is still Pending; a standalone PublishVersion is refused then.
 		cutWhilePending: !gate && m.isPending(functionName),
 	}
+
+	// Likewise only Publish=true on UpdateFunctionCode cuts a version while an
+	// update is InProgress. That version settles together with the update.
+	if !gate && m.isUpdating(functionName) {
+		vd.updateWindow = m.updateSettle.Window(functionName)
+	}
 	fd.versions = append(fd.versions, vd)
 	m.funcs.Set(functionName, fd)
 
@@ -134,12 +140,14 @@ func (m *Mock) versionInfo(functionName string, v *versionData) driver.FunctionV
 }
 
 // observeVersion sets a published version's lifecycle. A published version is
-// immutable, so an update of $LATEST (and its InProgress window) never reaches
-// it: it is Active with LastUpdateStatus Successful. The one exception is the
-// version CreateFunction(Publish=true) cut, which AWS reports Pending (reason
-// Creating, no LastUpdateStatus) until the function's creation completes.
+// immutable, so a later update of $LATEST (and its InProgress window) never
+// reaches it: it is Active with LastUpdateStatus Successful. The exceptions are
+// the versions a write cut with Publish=true: the one CreateFunction cut is
+// Pending (reason Creating, no LastUpdateStatus) until the function's creation
+// completes, and the one UpdateFunctionCode cut is Pending the same way until
+// that update completes, as real Lambda reports them.
 func (m *Mock) observeVersion(functionName string, v *versionData, out *driver.FunctionVersion) {
-	if v.cutWhilePending && m.isPending(functionName) {
+	if (v.cutWhilePending && m.isPending(functionName)) || !v.updateWindow.Settled(m.opts.Clock.Now()) {
 		out.State = statePending
 		out.StateReason = stateReasonCreating
 		out.StateReasonCode = stateReasonCodeCreating
