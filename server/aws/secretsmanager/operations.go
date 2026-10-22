@@ -308,29 +308,36 @@ func (h *Handler) listSecrets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	st, isStager := h.secrets.(secretStager)
-
 	entries := make([]secretListEntryJSON, 0, len(page))
 
 	for i := range page {
-		entry := toSecretListEntry(&page[i])
-
-		if isStager {
-			if rot, rerr := st.SecretRotationDetails(r.Context(), page[i].Name); rerr == nil {
-				applyRotationInfo(&entry, rot)
-			}
-
-			// Only reachable with IncludePlannedDeletion: a secret scheduled for
-			// deletion carries its DeletedDate, as DescribeSecret reports it.
-			if date, deleted := st.SecretDeletionDate(r.Context(), page[i].Name); deleted {
-				entry.DeletedDate = epochSeconds(date)
-			}
-		}
-
-		entries = append(entries, entry)
+		entries = append(entries, h.listEntry(r, &page[i]))
 	}
 
 	wire.WriteJSON(w, listSecretsResponse{SecretList: entries, NextToken: next})
+}
+
+// listEntry renders one ListSecrets entry: the secret's metadata plus, when
+// the AWS staging surface is available, its rotation details and (for a
+// secret scheduled for deletion, only listed with IncludePlannedDeletion) its
+// DeletedDate, as DescribeSecret reports them.
+func (h *Handler) listEntry(r *http.Request, info *secretsdriver.SecretInfo) secretListEntryJSON {
+	entry := toSecretListEntry(info)
+
+	st, ok := h.secrets.(secretStager)
+	if !ok {
+		return entry
+	}
+
+	if rot, err := st.SecretRotationDetails(r.Context(), info.Name); err == nil {
+		applyRotationInfo(&entry, rot)
+	}
+
+	if date, deleted := st.SecretDeletionDate(r.Context(), info.Name); deleted {
+		entry.DeletedDate = epochSeconds(date)
+	}
+
+	return entry
 }
 
 // listSecretInfos returns the secrets ListSecrets considers: active secrets,
