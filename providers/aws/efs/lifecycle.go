@@ -95,18 +95,25 @@ func (m *Mock) mtViewLocked(fd *fsData, mt *driver.MountTarget) driver.MountTarg
 // window has elapsed: a file system past its "deleting" window is gone
 // (FileSystemNotFound), and mount targets past theirs are removed.
 func (m *Mock) getFS(id string) (*fsData, bool) {
-	fd, ok := m.fileSystems.Get(id)
+	fd, ok, _ := m.settleFS(id)
+
+	return fd, ok
+}
+
+// settleFS is getFS that also reports whether it changed stored state (reaped
+// the file system or any of its mount targets, or dropped an elapsed create
+// window), so Tick can report that change to the serve scheduler.
+func (m *Mock) settleFS(id string) (fd *fsData, ok, changed bool) {
+	fd, ok = m.fileSystems.Get(id)
 	if !ok {
-		return nil, false
+		return nil, false, false
 	}
 
 	if m.reapFS(id, fd) {
-		return nil, false
+		return nil, false, true
 	}
 
-	m.reapMountTargets(fd)
-
-	return fd, true
+	return fd, true, m.reapMountTargets(fd)
 }
 
 // reapFS removes a file system whose deletion window has elapsed, releasing its
@@ -131,16 +138,20 @@ func (m *Mock) reapFS(id string, fd *fsData) bool {
 }
 
 // reapMountTargets removes mount targets whose deletion window has elapsed and
-// drops create windows that have elapsed.
-func (m *Mock) reapMountTargets(fd *fsData) {
+// drops create windows that have elapsed. It reports whether it changed
+// anything.
+func (m *Mock) reapMountTargets(fd *fsData) bool {
 	fd.mu.Lock()
 	defer fd.mu.Unlock()
 
 	now := m.now()
+	changed := false
 
 	for id, ready := range fd.mtReadyAt {
 		if !now.Before(ready) {
 			delete(fd.mtReadyAt, id)
+
+			changed = true
 		}
 	}
 
@@ -163,6 +174,8 @@ func (m *Mock) reapMountTargets(fd *fsData) {
 		//nolint:gosec // mount-target count is tiny, never near int32 max
 		fd.fs.NumberOfMountTargets = int32(len(fd.mountTgts))
 	}
+
+	return changed || removed
 }
 
 // removeMountTargetLocked deletes a mount target immediately. Callers hold fd.mu

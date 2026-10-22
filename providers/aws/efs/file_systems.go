@@ -151,6 +151,12 @@ func (m *Mock) DeleteFileSystem(_ context.Context, fileSystemID string) error {
 		return nil
 	}
 
+	// Immediate delete (the default). Mark the record as deleting as well, so a
+	// request that resolved fd before this delete and is waiting on fd.mu (for
+	// example CreateAccessPoint or CreateMountTarget) is rejected instead of
+	// storing a child on a file system that is gone.
+	fd.deleteAt = m.now()
+
 	m.fileSystems.Delete(fileSystemID)
 	m.tokenIndex.Delete(fd.fs.CreationToken)
 
@@ -231,18 +237,21 @@ func (m *Mock) UpdateFileSystem(_ context.Context, in driver.UpdateFileSystemInp
 }
 
 // UpdateFileSystemProtection sets a file system's replication-overwrite
-// protection (ENABLED | DISABLED | REPLICATING). An empty value leaves the
-// setting unchanged. The file system must be "available", and a file system
-// that is already the source or destination of a replication configuration is
-// rejected with ReplicationAlreadyExists.
+// protection (ENABLED | DISABLED). An empty value leaves the setting unchanged.
+// REPLICATING is in the API enum, but it is the state EFS itself sets on a
+// replication destination ("The file system is being used as the destination
+// file system in a replication configuration"), not one a caller chooses, so it
+// is rejected with BadRequest like any other value. The file system must be
+// "available", and a file system that is already the source or destination of
+// a replication configuration is rejected with ReplicationAlreadyExists.
 func (m *Mock) UpdateFileSystemProtection(
 	_ context.Context, fileSystemID, protection string,
 ) (*driver.FileSystemProtection, error) {
 	switch protection {
-	case "", driver.ProtectionEnabled, driver.ProtectionDisabled, driver.ProtectionReplicating:
+	case "", driver.ProtectionEnabled, driver.ProtectionDisabled:
 	default:
 		return nil, errors.Newf(errors.InvalidArgument,
-			"invalid ReplicationOverwriteProtection %q; valid values are ENABLED, DISABLED, REPLICATING", protection)
+			"invalid ReplicationOverwriteProtection %q; valid values are ENABLED, DISABLED", protection)
 	}
 
 	fd, ok := m.getFS(fileSystemID)

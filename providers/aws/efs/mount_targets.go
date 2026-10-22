@@ -433,21 +433,23 @@ func (m *Mock) CreateAccessPoint(_ context.Context, in driver.CreateAccessPointI
 
 	id := "fsap-" + idgen.GenerateID("")
 
-	// An access point can only be created on an "available" file system.
-	fd.mu.RLock()
-	stateErr := m.requireAvailableLocked(fd)
-	fd.mu.RUnlock()
-
-	if stateErr != nil {
-		return nil, stateErr
-	}
-
 	// Store the access point and publish it via apIndex BEFORE claiming the
 	// ClientToken, so a racing same-token loser can always resolve the winner's
 	// access point by id: there is no lookup-before-store window (the F1
 	// file-system path is safe the same way: its loser recovers by id, not by
 	// object lookup).
 	fd.mu.Lock()
+
+	// An access point can only be created on an "available" file system. The
+	// check runs under the same lock as the store, so a concurrent
+	// DeleteFileSystem either sees this access point (FileSystemInUse) or has
+	// already marked the file system "deleting" (rejected here).
+	if err := m.requireAvailableLocked(fd); err != nil {
+		fd.mu.Unlock()
+
+		return nil, err
+	}
+
 	ap := &driver.AccessPoint{
 		ClientToken:    in.ClientToken,
 		Name:           name,

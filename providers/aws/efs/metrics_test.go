@@ -133,10 +133,20 @@ func TestMetricsSkipCreatingAndDeleting(t *testing.T) {
 		t.Fatalf("DeleteFileSystem: %v", err)
 	}
 
+	deletedAt := clk.Now()
+
 	clk.Advance(time.Hour)
 
+	// This Tick reaps the file system (a state change) but publishes nothing.
+	m.Tick(clk.Now())
+
+	dims := map[string]string{"FileSystemId": fs.FileSystemID, "StorageClass": "Total"}
+	if got := sampleCount(t, cw, "StorageBytes", dims, deletedAt.Add(time.Second), clk.Now().Add(time.Minute)); len(got) != 0 {
+		t.Fatalf("Tick published for a deleted file system: %v", got)
+	}
+
 	if m.Tick(clk.Now()) {
-		t.Fatal("Tick published for a deleted file system")
+		t.Fatal("Tick reported a change once the file system was gone")
 	}
 }
 

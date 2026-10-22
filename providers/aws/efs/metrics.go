@@ -58,37 +58,41 @@ func (m *Mock) SetMonitoring(mon mondriver.Monitoring) {
 	m.monitoring = mon
 }
 
-// Tick publishes the AWS/EFS metrics that are due at now for every available
-// file system, and reports whether it published anything. It has the
+// Tick finishes the lifecycle transitions whose windows have elapsed (a
+// "deleting" file system or mount target is removed) and publishes the AWS/EFS
+// metrics that are due at now for every available file system. It reports
+// whether it changed state: a reap, or published metrics (the datapoints land
+// in CloudWatch's persisted state and the sample times in EFS's). It has the
 // config.Tickable signature of the shared serve scheduler; library mode never
 // calls it, so tests drive it with a FakeClock. Each file system is sampled
 // under its own lock and everything is published after all locks are released.
 func (m *Mock) Tick(now time.Time) bool {
-	if m.monitoring == nil {
-		return false
-	}
-
-	var data []mondriver.MetricDatum
+	var (
+		data    []mondriver.MetricDatum
+		changed bool
+	)
 
 	ids := m.fileSystems.Keys()
 	sort.Strings(ids)
 
 	for _, id := range ids {
-		fd, ok := m.getFS(id)
-		if !ok {
+		fd, ok, reaped := m.settleFS(id)
+		changed = changed || reaped
+
+		if !ok || m.monitoring == nil {
 			continue
 		}
 
 		data = append(data, m.dueMetrics(fd, now)...)
 	}
 
-	if len(data) == 0 {
-		return false
+	if len(data) > 0 {
+		_ = m.monitoring.PutMetricData(context.Background(), data)
+
+		changed = true
 	}
 
-	_ = m.monitoring.PutMetricData(context.Background(), data)
-
-	return true
+	return changed
 }
 
 // dueMetrics samples fd's metrics that are due at now and records the sample

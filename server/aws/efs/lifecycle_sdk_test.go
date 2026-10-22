@@ -92,6 +92,15 @@ func TestSDKUpdateFileSystemProtection(t *testing.T) {
 	if !errors.As(err, &bad) {
 		t.Fatalf("invalid value: want BadRequest, got %v", err)
 	}
+
+	// REPLICATING is set by EFS on a replication destination, not by callers.
+	_, err = c.UpdateFileSystemProtection(ctx, &awsefs.UpdateFileSystemProtectionInput{
+		FileSystemId:                   fs.FileSystemId,
+		ReplicationOverwriteProtection: efstypes.ReplicationOverwriteProtectionReplicating,
+	})
+	if !errors.As(err, &bad) {
+		t.Fatalf("REPLICATING: want BadRequest, got %v", err)
+	}
 }
 
 // TestSDKAsyncLifecycle drives the creating -> available -> deleting -> gone
