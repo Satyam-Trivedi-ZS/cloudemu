@@ -26,6 +26,16 @@ type FunctionVersion struct {
 	CodeSize int64
 	// Environment is the environment-variable set snapshotted at publish time.
 	Environment map[string]string
+	// State, StateReason, StateReasonCode and LastUpdateStatus are a published
+	// version's own lifecycle. A published version is immutable, so it does not
+	// follow later $LATEST updates: it is Active/Successful, except the version
+	// CreateFunction(Publish=true) cuts, which is Pending with the function until
+	// creation completes. Empty for $LATEST (read FunctionInfo) and for a
+	// backend that does not model the lifecycle.
+	State            string
+	StateReason      string
+	StateReasonCode  string
+	LastUpdateStatus string
 }
 
 // PermissionStatement is one statement of a function's resource-based policy,

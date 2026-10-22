@@ -197,6 +197,10 @@ type versionData struct {
 	// awsConfig freezes the AWS-only settings (VpcConfig, DeadLetterConfig,
 	// TracingConfig, Architectures, EphemeralStorage, Layers) at publish time.
 	awsConfig driver.AWSFunctionConfig
+	// cutWhilePending marks the version CreateFunction(Publish=true) cut while
+	// the function was still Pending creation; it reports Pending until creation
+	// completes. Every other published version is Active/Successful.
+	cutWhilePending bool
 }
 
 type aliasData struct {

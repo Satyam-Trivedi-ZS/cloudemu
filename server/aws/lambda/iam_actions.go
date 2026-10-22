@@ -146,7 +146,6 @@ func (c *checkSet) requestTags(tags map[string]string) {
 	c.setList(condTagKeys, keys)
 }
 
-// resourceTags sets aws:ResourceTag/* from the tags of the function name.
 // codeSigningConfigTags sets the aws:ResourceTag/ condition keys from a code
 // signing config's tags.
 func (c *checkSet) codeSigningConfigTags(arn string) {
@@ -165,6 +164,7 @@ func (c *checkSet) codeSigningConfigTags(arn string) {
 	}
 }
 
+// resourceTags sets aws:ResourceTag/* from the tags of the function name.
 func (c *checkSet) resourceTags(name string) {
 	tagger, ok := c.h.fn.(functionTagger)
 	if !ok {

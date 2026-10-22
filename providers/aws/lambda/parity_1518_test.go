@@ -429,3 +429,73 @@ func TestFunctionNotFoundMessageNamesARN(t *testing.T) {
 		t.Errorf("Invoke qualifier message = %q", got)
 	}
 }
+
+// TestGetAliasNotFoundMessage matches real Lambda's GetAlias text for a missing
+// alias: "Cannot find alias arn: <function ARN>:<alias>".
+func TestGetAliasNotFoundMessage(t *testing.T) {
+	ctx := context.Background()
+	m := newTestMock()
+
+	if _, err := m.CreateFunction(ctx, defaultFuncConfig()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := m.GetAlias(ctx, "my-func", "current")
+	if !cerrors.IsNotFound(err) {
+		t.Fatalf("err = %v, want NotFound", err)
+	}
+
+	if got, want := cerrors.Message(err),
+		"Cannot find alias arn: arn:aws:lambda:us-east-1:123456789012:function:my-func:current"; got != want {
+		t.Errorf("message = %q, want %q", got, want)
+	}
+}
+
+// TestPublishedVersionReportsItsOwnLifecycle: a published version reports its
+// own State/LastUpdateStatus (Active/Successful), never $LATEST's in-flight
+// update; only the version CreateFunction(Publish=true) cuts is Pending, and
+// only until creation completes.
+func TestPublishedVersionReportsItsOwnLifecycle(t *testing.T) {
+	ctx := context.Background()
+	m, fc := newSettleMock()
+
+	if _, err := m.CreateFunction(ctx, defaultFuncConfig()); err != nil {
+		t.Fatal(err)
+	}
+
+	onCreate, err := m.PublishVersionOnWrite(ctx, "my-func", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if onCreate.State != statePending || onCreate.StateReasonCode != stateReasonCodeCreating || onCreate.LastUpdateStatus != "" {
+		t.Fatalf("version cut on create = %q/%q/%q, want Pending/Creating/<empty>",
+			onCreate.State, onCreate.StateReasonCode, onCreate.LastUpdateStatus)
+	}
+
+	fc.Advance(2 * time.Second)
+
+	if _, err := m.UpdateFunction(ctx, "my-func", driver.FunctionConfig{Timeout: 10}); err != nil {
+		t.Fatal(err)
+	}
+
+	vers, err := m.ListVersions(ctx, "my-func")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, v := range vers {
+		if v.Version != "1" {
+			continue
+		}
+
+		if v.State != stateActive || v.StateReasonCode != "" || v.LastUpdateStatus != lastUpdateSuccessful {
+			t.Errorf("version 1 during $LATEST update = %q/%q/%q, want Active/<empty>/Successful",
+				v.State, v.StateReasonCode, v.LastUpdateStatus)
+		}
+
+		if v.CreatedAt != "2025-01-01T00:00:00Z" {
+			t.Errorf("version 1 CreatedAt = %q, want its publish time", v.CreatedAt)
+		}
+	}
+}

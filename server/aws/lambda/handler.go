@@ -127,6 +127,11 @@ const logTypeTail = "Tail"
 // statePending is the State of a function whose creation has not completed.
 const statePending = "Pending"
 
+// stateActive is the State of a function (or published version) ready to be
+// invoked; the fallback for a published version whose backend does not report
+// the version's own lifecycle.
+const stateActive = "Active"
+
 // invocationTypeDryRun validates parameters and permissions without running the
 // function. AWS returns HTTP 204 No Content (nothing is executed).
 const invocationTypeDryRun = "DryRun"
@@ -1075,13 +1080,8 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 
 	awsCfg := h.applyAWSConfig(r.Context(), req.FunctionName, h.createAWSConfig(&req), true)
 
-	if req.CodeSigningConfigArn != "" {
-		if csm, ok := h.fn.(codeSigningManager); ok {
-			if err := csm.PutFunctionCodeSigningConfig(r.Context(), req.FunctionName, req.CodeSigningConfigArn); err != nil {
-				writeErr(w, err)
-				return
-			}
-		}
+	if !h.attachCreateCodeSigningConfig(w, r, req.FunctionName, req.CodeSigningConfigArn) {
+		return
 	}
 
 	// Publish=true cuts version 1 from the just-created function and returns that
@@ -1100,6 +1100,39 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, toConfiguration(info, awsCfg))
+}
+
+// attachCreateCodeSigningConfig attaches the CodeSigningConfigArn of a
+// CreateFunction request to the just-created function. AWS validates the config
+// before creating anything, so when the attach fails (the config was deleted
+// after checkCodeSigningConfigExists) the function is rolled back rather than
+// left behind for a retry to conflict with, and the error is reported as the
+// pre-check would have reported it. It writes the error and returns false on
+// failure; an empty arn or a backend without code signing passes.
+func (h *Handler) attachCreateCodeSigningConfig(w http.ResponseWriter, r *http.Request, name, arn string) bool {
+	if arn == "" {
+		return true
+	}
+
+	csm, ok := h.fn.(codeSigningManager)
+	if !ok {
+		return true
+	}
+
+	err := csm.PutFunctionCodeSigningConfig(r.Context(), name, arn)
+	if err == nil {
+		return true
+	}
+
+	// Best effort: the function was created by this request and nothing has been
+	// returned to the client yet, so removing it restores the pre-request state.
+	_ = h.fn.DeleteFunction(r.Context(), name)
+
+	if h.checkCodeSigningConfigExists(w, r, arn) {
+		writeErr(w, err)
+	}
+
+	return false
 }
 
 // checkCreateRequest resolves the FunctionName of a CreateFunction request to
@@ -1550,9 +1583,12 @@ func (h *Handler) invoke(w http.ResponseWriter, r *http.Request, name string) {
 }
 
 // toVersionConfiguration renders a published version's configuration. It starts
-// from the live function (for name/ARN/state/environment) then overlays the
-// immutable per-version fields snapshotted at publish time, so each version
-// reports its own CodeSha256/RevisionId/runtime rather than reusing $LATEST.
+// from the live function (for name/ARN) then overlays the immutable per-version
+// fields snapshotted at publish time, so each version reports its own
+// CodeSha256/RevisionId/runtime/environment rather than reusing $LATEST. A
+// published version also keeps its own lifecycle: LastModified is its publish
+// time and State/LastUpdateStatus come from the version, never from an
+// in-flight update of $LATEST.
 func toVersionConfiguration(info *sdrv.FunctionInfo, ver *sdrv.FunctionVersion, awsCfg *sdrv.AWSFunctionConfig) functionConfiguration {
 	cfg := toConfiguration(info, awsCfg)
 	cfg.Version = ver.Version
@@ -1575,9 +1611,31 @@ func toVersionConfiguration(info *sdrv.FunctionInfo, ver *sdrv.FunctionVersion, 
 	// keeps the unqualified ARN.
 	if ver.Version != "" && ver.Version != latestVersion {
 		cfg.FunctionArn = info.ARN + ":" + ver.Version
+		applyVersionLifecycle(&cfg, ver)
 	}
 
 	return cfg
+}
+
+// applyVersionLifecycle replaces the $LATEST lifecycle fields toConfiguration
+// copied with a published version's own: its publish time as LastModified and
+// the State/StateReason/LastUpdateStatus the backend reports for the version.
+// A backend that does not report a version lifecycle falls back to
+// Active/Successful, which is what an immutable published version settles to.
+func applyVersionLifecycle(cfg *functionConfiguration, ver *sdrv.FunctionVersion) {
+	if ver.CreatedAt != "" {
+		cfg.LastModified = ver.CreatedAt
+	}
+
+	cfg.State = ver.State
+	cfg.StateReason = ver.StateReason
+	cfg.StateReasonCode = ver.StateReasonCode
+	cfg.LastUpdateStatus = ver.LastUpdateStatus
+
+	if cfg.State == "" {
+		cfg.State = stateActive
+		cfg.LastUpdateStatus = lastUpdateStatusSuccessful
+	}
 }
 
 func toConfiguration(info *sdrv.FunctionInfo, awsCfg *sdrv.AWSFunctionConfig) functionConfiguration {
