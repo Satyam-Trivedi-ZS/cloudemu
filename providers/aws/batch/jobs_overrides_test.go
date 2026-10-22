@@ -116,6 +116,7 @@ func TestSubmitJobAppliesEksPropertiesOverride(t *testing.T) {
 func TestSubmitJobAppliesNodeOverrides(t *testing.T) {
 	m := newMock(t)
 	setupQueue(t, m)
+	setupEC2Queue(t, m)
 
 	registerJD(t, m, driver.RegisterJobDefinitionInput{
 		Name: "mnp", Type: driver.JDTypeMultiNode,
@@ -125,7 +126,7 @@ func TestSubmitJobAppliesNodeOverrides(t *testing.T) {
 	})
 
 	j := submit(t, m, driver.SubmitJobInput{
-		JobDefinition: "mnp",
+		JobDefinition: "mnp", JobQueue: ec2Queue,
 		NodeOverrides: json.RawMessage(`{"numNodes":4,"nodePropertyOverrides":[
 			{"targetNodes":"1:","containerOverrides":{"command":["work","--hard"]},"instanceTypes":["c5.large"]}]}`),
 	})
@@ -155,6 +156,7 @@ func TestSubmitJobAppliesNodeOverrides(t *testing.T) {
 func TestSubmitJobRejectsUnusableOverrides(t *testing.T) {
 	m := newMock(t)
 	setupQueue(t, m)
+	setupEC2Queue(t, m)
 	ctx := context.Background()
 
 	registerJD(t, m, driver.RegisterJobDefinitionInput{
@@ -184,7 +186,9 @@ func TestSubmitJobRejectsUnusableOverrides(t *testing.T) {
 	}
 
 	for name, in := range cases {
-		in.JobName, in.JobQueue = "j", "q"
+		// An EC2 queue, so the override rules (not the Fargate platform
+		// rule) are what rejects each case.
+		in.JobName, in.JobQueue = "j", ec2Queue
 		if _, err := m.SubmitJob(ctx, in); !errors.IsInvalidArgument(err) {
 			t.Errorf("%s: want InvalidArgument, got %v", name, err)
 		}

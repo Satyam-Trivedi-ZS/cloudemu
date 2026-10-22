@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stackshy/cloudemu/v2/config"
+	"github.com/stackshy/cloudemu/v2/errors"
 	"github.com/stackshy/cloudemu/v2/providers/aws/batch"
 	"github.com/stackshy/cloudemu/v2/services/batch/driver"
 )
@@ -252,4 +253,74 @@ func TestMultiNodeNodesSurviveSnapshot(t *testing.T) {
 	if n.NodeDetails == nil || n.NodeDetails.NodeIndex != 2 || !strings.Contains(string(n.Container), `"command":["go"]`) {
 		t.Fatalf("restored node = %+v", n)
 	}
+}
+
+func TestSubmitJobRejectsMultiNodeOnFargate(t *testing.T) {
+	m := newMock(t)
+	setupQueue(t, m) // queue "q" is on a FARGATE compute environment
+	setupEC2Queue(t, m)
+	registerMNP(t, m)
+	ctx := context.Background()
+
+	if _, err := m.CreateComputeEnvironment(ctx, driver.CreateComputeEnvironmentInput{
+		Name: "ce-spot", Type: driver.CETypeManaged,
+		ComputeResources: json.RawMessage(`{"type":"FARGATE_SPOT","maxvCpus":4,"subnets":["s"]}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.CreateJobQueue(ctx, driver.CreateJobQueueInput{
+		Name: "q-spot", Priority: 1,
+		ComputeEnvironmentOrder: []driver.ComputeEnvironmentOrder{{Order: 1, ComputeEnvironment: "ce-spot"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	nodeOverrides := json.RawMessage(`{"nodePropertyOverrides":[{"targetNodes":"0:","containerOverrides":{"command":["x"]}}]}`)
+
+	cases := []struct {
+		name, queue, jd, want string
+		overrides             json.RawMessage
+	}{
+		{"nodeOverrides on a Fargate queue", "q", "mnp", "nodeOverrides isn't applicable", nodeOverrides},
+		{"nodeOverrides with a container definition on Fargate", "q", "jd", "nodeOverrides isn't applicable", nodeOverrides},
+		{"multinode definition on a Fargate queue", "q", "mnp", "can't run on Fargate", nil},
+		{"multinode definition on a FARGATE_SPOT queue (by ARN)",
+			"arn:aws:batch:us-east-1:000000000000:job-queue/q-spot", "mnp", "can't run on Fargate", nil},
+	}
+
+	for _, tc := range cases {
+		_, err := m.SubmitJob(ctx, driver.SubmitJobInput{
+			JobName: "j", JobQueue: tc.queue, JobDefinition: tc.jd, NodeOverrides: tc.overrides,
+		})
+		if !errors.IsInvalidArgument(err) || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: want InvalidArgument %q, got %v", tc.name, tc.want, err)
+		}
+	}
+
+	// The same submissions are accepted on an EC2 queue.
+	submit(t, m, driver.SubmitJobInput{JobQueue: ec2Queue, JobDefinition: "mnp", NodeOverrides: nodeOverrides})
+
+	// A container job on a Fargate queue is unaffected.
+	submit(t, m, driver.SubmitJobInput{JobQueue: "q", JobDefinition: "jd"})
+}
+
+func TestRegisterMultiNodeRejectsFargatePlatform(t *testing.T) {
+	m := newMock(t)
+	ctx := context.Background()
+	props := json.RawMessage(`{"numNodes":2,"mainNode":0,"nodeRangeProperties":[{"targetNodes":"0:","container":{"image":"x"}}]}`)
+
+	for _, typ := range []string{driver.JDTypeMultiNode, driver.JDTypeContainer} {
+		_, err := m.RegisterJobDefinition(ctx, driver.RegisterJobDefinitionInput{
+			Name: "fg", Type: typ, NodeProperties: props, PlatformCapabilities: []string{"FARGATE"},
+			ContainerProperties: json.RawMessage(`{"image":"x"}`),
+		})
+		if !errors.IsInvalidArgument(err) {
+			t.Errorf("%s nodeProperties with FARGATE: want InvalidArgument, got %v", typ, err)
+		}
+	}
+
+	registerJD(t, m, driver.RegisterJobDefinitionInput{
+		Name: "ec2", Type: driver.JDTypeMultiNode, NodeProperties: props, PlatformCapabilities: []string{"EC2"},
+	})
 }

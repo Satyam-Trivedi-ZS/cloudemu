@@ -379,3 +379,33 @@ func TestSDKMultiNodeJobNodes(t *testing.T) {
 		}
 	}
 }
+
+func TestSDKSubmitJobRejectsNodeOverridesOnFargate(t *testing.T) {
+	ctx := context.Background()
+	c := newBatchClient(t)
+	setupSDKQueue(t, c, nil)
+	setupSDKMultiNode(t, c)
+
+	_, err := c.SubmitJob(ctx, &awsbatch.SubmitJobInput{
+		JobName: aws.String("x"), JobQueue: aws.String("q"), JobDefinition: aws.String("mnp"),
+		NodeOverrides: &batchtypes.NodeOverrides{NumNodes: aws.Int32(3)},
+	})
+	requireClientException(t, err, "SubmitJob nodeOverrides on a Fargate queue")
+
+	_, err = c.SubmitJob(ctx, &awsbatch.SubmitJobInput{
+		JobName: aws.String("x"), JobQueue: aws.String("q"), JobDefinition: aws.String("mnp"),
+	})
+	requireClientException(t, err, "SubmitJob multinode definition on a Fargate queue")
+
+	_, err = c.RegisterJobDefinition(ctx, &awsbatch.RegisterJobDefinitionInput{
+		JobDefinitionName: aws.String("mnp-fg"), Type: batchtypes.JobDefinitionTypeMultinode,
+		PlatformCapabilities: []batchtypes.PlatformCapability{batchtypes.PlatformCapabilityFargate},
+		NodeProperties: &batchtypes.NodeProperties{
+			NumNodes: aws.Int32(2), MainNode: aws.Int32(0),
+			NodeRangeProperties: []batchtypes.NodeRangeProperty{
+				{TargetNodes: aws.String("0:"), Container: &batchtypes.ContainerProperties{Image: aws.String("mpi")}},
+			},
+		},
+	})
+	requireClientException(t, err, "RegisterJobDefinition multinode with FARGATE")
+}

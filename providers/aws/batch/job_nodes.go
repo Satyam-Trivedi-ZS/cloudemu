@@ -6,12 +6,21 @@ import (
 	"strconv"
 	"strings"
 
+	cerrors "github.com/stackshy/cloudemu/v2/errors"
 	"github.com/stackshy/cloudemu/v2/services/batch/driver"
 )
 
 // nodeSeparator joins a multi-node parallel job's ID and a node index: node i
 // of job J is "J#i" (Multi-node parallel jobs, Batch User Guide).
 const nodeSeparator = "#"
+
+// Compute resource types that run on Fargate (ComputeResource.type), and the
+// job definition platform capability for Fargate.
+const (
+	crTypeFargate     = "FARGATE"
+	crTypeFargateSpot = "FARGATE_SPOT"
+	platformFargate   = "FARGATE"
+)
 
 // nodeLayout is the node count, main node and node ranges of a multi-node
 // parallel job, read from its nodeProperties (overrides already applied).
@@ -164,4 +173,74 @@ func (l *jobLister) nodes(m *Mock) *driver.ListJobsOutput {
 // keeps reports whether a listed job passes the status and filters.
 func (l *jobLister) keeps(j *driver.Job) bool {
 	return (!l.useStatus || j.Status == l.status) && matchesFilters(j, l.in.Filters)
+}
+
+// fargateQueue reports whether a job queue runs its jobs on Fargate: its
+// compute environments have FARGATE or FARGATE_SPOT compute resources. A queue
+// can't mix Fargate and EC2 compute environments (Job queues on Fargate, Batch
+// User Guide), so one Fargate compute environment decides.
+func (m *Mock) fargateQueue(q *driver.JobQueue) bool {
+	for _, o := range q.ComputeEnvironmentOrder {
+		ce, ok := m.computeEnvs.Get(nameFromARN(kindComputeEnvironment, o.ComputeEnvironment))
+		if !ok || !isSet(ce.ComputeResources) {
+			continue
+		}
+
+		var cr struct {
+			Type string `json:"type"`
+		}
+
+		if json.Unmarshal(ce.ComputeResources, &cr) == nil && (cr.Type == crTypeFargate || cr.Type == crTypeFargateSpot) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// validateJobPlatform rejects a submission the queue's platform can't run. On
+// a Fargate queue, nodeOverrides isn't applicable (SubmitJob API reference:
+// "use containerOverrides instead") and multi-node parallel jobs aren't
+// supported (RegisterJobDefinition API reference, type and nodeProperties).
+func (m *Mock) validateJobPlatform(q *driver.JobQueue, jd *driver.JobDefinition, in *driver.SubmitJobInput) error {
+	if !isSet(in.NodeOverrides) && !isMultiNode(jd) {
+		return nil
+	}
+
+	if !m.fargateQueue(q) {
+		return nil
+	}
+
+	if isSet(in.NodeOverrides) {
+		return cerrors.Newf(cerrors.InvalidArgument,
+			"nodeOverrides isn't applicable to jobs that run on Fargate resources (job queue %q uses Fargate "+
+				"compute environments); use containerOverrides instead", q.Name)
+	}
+
+	return cerrors.Newf(cerrors.InvalidArgument,
+		"multi-node parallel job definition %q can't run on Fargate resources (job queue %q uses Fargate "+
+			"compute environments)", jd.ARN, q.Name)
+}
+
+func isMultiNode(jd *driver.JobDefinition) bool {
+	return jd.Type == driver.JDTypeMultiNode || isSet(jd.NodeProperties)
+}
+
+// validateJobDefinitionPlatform enforces the RegisterJobDefinition rule that a
+// job run on Fargate resources can't be multi-node: nodeProperties (and so
+// type multinode) can't be combined with the FARGATE platform capability.
+func validateJobDefinitionPlatform(in *driver.RegisterJobDefinitionInput) error {
+	if !isSet(in.NodeProperties) && in.Type != driver.JDTypeMultiNode {
+		return nil
+	}
+
+	for _, c := range in.PlatformCapabilities {
+		if c == platformFargate {
+			return cerrors.New(cerrors.InvalidArgument,
+				"multinode job definitions and nodeProperties aren't supported for jobs that run on Fargate "+
+					"resources (platformCapabilities FARGATE)")
+		}
+	}
+
+	return nil
 }

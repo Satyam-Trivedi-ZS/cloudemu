@@ -58,6 +58,10 @@ func (m *Mock) SubmitJob(ctx context.Context, in driver.SubmitJobInput) (*driver
 		return nil, err
 	}
 
+	if platformErr := m.validateJobPlatform(&q, &jd, &in); platformErr != nil {
+		return nil, platformErr
+	}
+
 	job, err := m.buildJob(&in, &q, &jd)
 	if err != nil {
 		return nil, err
