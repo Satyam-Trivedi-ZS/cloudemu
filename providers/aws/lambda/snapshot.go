@@ -38,13 +38,16 @@ type lambdaSnapshot struct {
 // the mock does not retain, so republished code is still identified after a
 // restore; aliases are captured by name.
 type funcSnapshot struct {
-	Info         driver.FunctionInfo                              `json:"info"`
-	EngineBacked bool                                             `json:"engineBacked,omitempty"`
-	Versions     []*versionSnapshot                               `json:"versions,omitempty"`
-	NextVersion  int                                              `json:"nextVersion,omitempty"`
-	Aliases      map[string]driver.Alias                          `json:"aliases,omitempty"`
-	Concurrency  *driver.ConcurrencyConfig                        `json:"concurrency,omitempty"`
-	Policies     map[string]map[string]driver.PermissionStatement `json:"policies,omitempty"`
+	Info         driver.FunctionInfo `json:"info"`
+	EngineBacked bool                `json:"engineBacked,omitempty"`
+	// EngineName is the engine key the function's current code is deployed under
+	// when it is not the function name (a code update under AsyncSettle).
+	EngineName  string                                           `json:"engineName,omitempty"`
+	Versions    []*versionSnapshot                               `json:"versions,omitempty"`
+	NextVersion int                                              `json:"nextVersion,omitempty"`
+	Aliases     map[string]driver.Alias                          `json:"aliases,omitempty"`
+	Concurrency *driver.ConcurrencyConfig                        `json:"concurrency,omitempty"`
+	Policies    map[string]map[string]driver.PermissionStatement `json:"policies,omitempty"`
 	// URLConfigs is the Function URL config per qualifier (see funcData.urlConfigs).
 	URLConfigs map[string]*driver.FunctionURLConfig `json:"urlConfigs,omitempty"`
 	// URLConfig is the legacy single-URL shape a snapshot taken before Function
@@ -178,7 +181,7 @@ func snapshotLayerPermissions(ld *layerData) map[string]*layerVersionPolicySnaps
 
 func snapshotFunc(fd *funcData) *funcSnapshot {
 	fs := &funcSnapshot{
-		Info: fd.info, EngineBacked: fd.engineBacked, NextVersion: fd.nextVersion,
+		Info: fd.info, EngineBacked: fd.engineBacked, EngineName: fd.engineName, NextVersion: fd.nextVersion,
 		Concurrency: fd.concurrency, Policies: fd.policies, URLConfigs: fd.urlConfigs,
 		AWSConfig: fd.awsConfig, EventInvokeConfigs: fd.eventInvokeConfigs,
 		ProvisionedConcurrencyConfigs: fd.provisionedConcurrencyConfigs,
@@ -283,7 +286,7 @@ func restoreLayerData(ls *layerSnapshot) (*layerData, error) {
 
 func (m *Mock) restoreFunc(name string, fs *funcSnapshot) funcData {
 	fd := funcData{
-		info: fs.Info, engineBacked: fs.EngineBacked, nextVersion: fs.NextVersion,
+		info: fs.Info, engineBacked: fs.EngineBacked, engineName: fs.EngineName, nextVersion: fs.NextVersion,
 		aliases: memstore.New[*aliasData](), concurrency: fs.Concurrency,
 		policies: fs.Policies, urlConfigs: legacyURLConfigs(fs), awsConfig: fs.AWSConfig,
 		eventInvokeConfigs:            fs.EventInvokeConfigs,

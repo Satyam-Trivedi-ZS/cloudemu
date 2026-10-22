@@ -2,6 +2,8 @@ package lambda
 
 import (
 	"context"
+	"maps"
+	"slices"
 
 	cerrors "github.com/stackshy/cloudemu/v2/errors"
 	"github.com/stackshy/cloudemu/v2/internal/idgen"
@@ -138,4 +140,130 @@ func (m *Mock) checkInvocable(fd *funcData) error {
 	}
 
 	return nil
+}
+
+// priorRevision is what Invoke of $LATEST runs while an update is InProgress:
+// the function's configuration, engine deployment and AWS-only settings as they
+// were before the update. Real Lambda documents that "invocations continue to
+// use the function's previous code and configuration until the update
+// completes". See
+// https://docs.aws.amazon.com/lambda/latest/dg/functions-states.html
+type priorRevision struct {
+	info         driver.FunctionInfo
+	engineBacked bool
+	engineName   string
+	awsConfig    driver.AWSFunctionConfig
+}
+
+// engineKey is the FunctionEngine key fd's current code is deployed under.
+func (fd *funcData) engineKey() string {
+	if fd.engineName != "" {
+		return fd.engineName
+	}
+
+	return fd.info.Name
+}
+
+// engineNameFor is the funcData.engineName value for engine key key of function
+// name: "" when the code is deployed under the function name itself.
+func engineNameFor(name, key string) string {
+	if key == name {
+		return ""
+	}
+
+	return key
+}
+
+// updatesSettle reports whether an update opens an InProgress window, i.e.
+// whether AsyncSettle is on.
+func (m *Mock) updatesSettle() bool {
+	return m.opts.SettleDuration(settle.DefaultLambdaUpdateSettle) > 0
+}
+
+// updateEngineKey is the engine key a code update of fd deploys to. By default
+// it replaces the current deployment in place. Under AsyncSettle it is a fresh
+// key, so the current deployment keeps serving invocations until the update
+// completes. The suffix uses '.', which a Lambda function name cannot contain,
+// so the key cannot collide with another function's.
+func (m *Mock) updateEngineKey(fd *funcData) string {
+	if !m.updatesSettle() {
+		return fd.engineKey()
+	}
+
+	return fd.info.Name + ".update-" + newRevisionID()
+}
+
+// keepPrior records fd as it is now as the revision Invoke serves until the
+// update being committed completes. A no-op unless AsyncSettle is on. The
+// previous prior's update has completed (an update is refused while another is
+// InProgress), so its engine deployment is retired unless it is still the live
+// one. Callers hold m.mu and write fd back.
+func (m *Mock) keepPrior(fd *funcData) {
+	if !m.updatesSettle() {
+		return
+	}
+
+	if p := fd.prior; p != nil {
+		fd.retired = retireEngineKey(fd.retired, p.engineKey(fd.info.Name), fd.engineKey())
+	}
+
+	info := fd.info
+	info.Environment = maps.Clone(info.Environment)
+	info.Tags = maps.Clone(info.Tags)
+
+	fd.prior = &priorRevision{
+		info: info, engineBacked: fd.engineBacked, engineName: fd.engineName,
+		awsConfig: cloneAWSConfig(&fd.awsConfig),
+	}
+}
+
+// engineKey is the engine key the prior revision of function name runs under.
+func (p *priorRevision) engineKey(name string) string {
+	if p.engineName != "" {
+		return p.engineName
+	}
+
+	return name
+}
+
+// retireEngineKey returns retired with key added, unless key is the live key or
+// already listed. It never appends in place, so a reader holding an earlier
+// funcData copy keeps its own slice.
+func retireEngineKey(retired []string, key, live string) []string {
+	if key == live || slices.Contains(retired, key) {
+		return retired
+	}
+
+	return append(slices.Clone(retired), key)
+}
+
+// engineKeys lists every engine key fd holds a deployment under: the live one,
+// the prior revision's and the retired ones, without duplicates.
+func (fd *funcData) engineKeys() []string {
+	keys := []string{fd.engineKey()}
+
+	if fd.prior != nil {
+		keys = append(keys, fd.prior.engineKey(fd.info.Name))
+	}
+
+	keys = append(keys, fd.retired...)
+	slices.Sort(keys)
+
+	return slices.Compact(keys)
+}
+
+// servePrior turns fd, a caller's copy, into what an invocation of
+// executedVersion runs: for $LATEST while an update is InProgress, the code and
+// configuration from before the update. Published versions are immutable and
+// never affected.
+func (m *Mock) servePrior(fd *funcData, executedVersion string) {
+	if executedVersion != latestVersion || fd.prior == nil || !m.isUpdating(fd.info.Name) {
+		return
+	}
+
+	p := fd.prior
+	fd.info = p.info
+	fd.engineBacked = p.engineBacked
+	fd.engineName = p.engineName
+	fd.awsConfig = p.awsConfig
 }
