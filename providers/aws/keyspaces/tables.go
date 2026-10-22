@@ -51,7 +51,26 @@ func cloneTable(in *ksdriver.Table) ksdriver.Table {
 // disabledIfEmpty defaults an unset status field to "DISABLED".
 func disabledIfEmpty(v string) string {
 	if v == "" {
-		return "DISABLED"
+		return statusDisabled
+	}
+
+	return v
+}
+
+// statusDisabled is the not-enabled value callers may send for the TTL and
+// client-side timestamps settings.
+const statusDisabled = "DISABLED"
+
+// enabledOnly normalizes the ttl and clientSideTimestamps status. Their model
+// enums (TimeToLiveStatus, ClientSideTimestampsStatus) hold only ENABLED, so
+// real Keyspaces never reports DISABLED: a table that never enabled the
+// setting omits the member from GetTable. "" records "not set"; DISABLED is
+// the documented default and maps to "" as well. The settings cannot be
+// turned off once enabled, so on UpdateTable a DISABLED request is kept as a
+// no-op by orKeep.
+func enabledOnly(v string) string {
+	if strings.EqualFold(v, statusDisabled) {
+		return ""
 	}
 
 	return v
@@ -146,9 +165,9 @@ func (m *Mock) CreateTable(_ context.Context, cfg ksdriver.CreateTableConfig) (*
 		CapacitySpecification:     resolveCapacity(cfg.CapacitySpecification),
 		EncryptionSpecification:   resolveEncryption(cfg.EncryptionSpecification),
 		PointInTimeRecoveryStatus: disabledIfEmpty(cfg.PointInTimeRecovery),
-		TTLStatus:                 disabledIfEmpty(cfg.TTLStatus),
+		TTLStatus:                 enabledOnly(cfg.TTLStatus),
 		DefaultTimeToLive:         cfg.DefaultTimeToLive,
-		ClientSideTimestamps:      disabledIfEmpty(cfg.ClientSideTimestamps),
+		ClientSideTimestamps:      enabledOnly(cfg.ClientSideTimestamps),
 		CdcStatus:                 disabledIfEmpty(cfg.CdcStatus),
 		Comment:                   cfg.Comment,
 		ReplicaRegions:            append([]string(nil), cfg.ReplicaRegions...),
@@ -287,8 +306,8 @@ func (m *Mock) UpdateTable(_ context.Context, cfg ksdriver.UpdateTableConfig) (*
 	}
 
 	t.PointInTimeRecoveryStatus = orKeep(cfg.PointInTimeRecovery, t.PointInTimeRecoveryStatus)
-	t.TTLStatus = orKeep(cfg.TTLStatus, t.TTLStatus)
-	t.ClientSideTimestamps = orKeep(cfg.ClientSideTimestamps, t.ClientSideTimestamps)
+	t.TTLStatus = orKeep(enabledOnly(cfg.TTLStatus), t.TTLStatus)
+	t.ClientSideTimestamps = orKeep(enabledOnly(cfg.ClientSideTimestamps), t.ClientSideTimestamps)
 	t.CdcStatus = orKeep(cfg.CdcStatus, t.CdcStatus)
 	t.Comment = orKeep(cfg.Comment, t.Comment)
 

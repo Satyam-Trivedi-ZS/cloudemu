@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/stackshy/cloudemu/v2/internal/snapshot"
+	ksdriver "github.com/stackshy/cloudemu/v2/services/keyspaces/driver"
 )
 
 var _ snapshot.Snapshottable = (*Mock)(nil)
@@ -86,6 +87,10 @@ func (m *Mock) Restore(_ context.Context, data json.RawMessage) error {
 		}
 	}
 
+	m.mu.Lock()
+	m.normalizeRestoredTablesLocked()
+	m.mu.Unlock()
+
 	if snap.Tags != nil {
 		m.mu.Lock()
 		m.tags = m.canonicalTagsLocked(snap.Tags)
@@ -93,6 +98,22 @@ func (m *Mock) Restore(_ context.Context, data json.RawMessage) error {
 	}
 
 	return nil
+}
+
+// normalizeRestoredTablesLocked clears the ttl and clientSideTimestamps
+// status of restored tables that never enabled them. An older build stored
+// DISABLED for both on every table, which GetTable then reported although real
+// Keyspaces omits the members (see enabledOnly). The caller holds the write
+// lock, and the tables store is already restored.
+func (m *Mock) normalizeRestoredTablesLocked() {
+	for _, key := range m.tables.Keys() {
+		m.tables.Update(key, func(t ksdriver.Table) ksdriver.Table {
+			t.TTLStatus = enabledOnly(t.TTLStatus)
+			t.ClientSideTimestamps = enabledOnly(t.ClientSideTimestamps)
+
+			return t
+		})
+	}
 }
 
 // canonicalTagsLocked keys restored tags by the canonical ARN of the keyspace

@@ -118,3 +118,52 @@ func TestGetTableOmitsUnsetFields(t *testing.T) {
 		t.Fatalf("provisioned capacity: %v", pcap)
 	}
 }
+
+// GetTable reports ttl and clientSideTimestamps only once they are enabled,
+// so a Terraform aws_keyspaces_table that sets neither reads back no block
+// and plans no replacement.
+func TestSDKGetTableOmitsUnsetTTLAndClientSideTimestamps(t *testing.T) {
+	client := newSDKClient(t)
+	ctx := context.Background()
+
+	if _, err := client.CreateKeyspace(ctx, &awskeyspaces.CreateKeyspaceInput{KeyspaceName: aws.String("app")}); err != nil {
+		t.Fatalf("CreateKeyspace: %v", err)
+	}
+
+	if _, err := client.CreateTable(ctx, &awskeyspaces.CreateTableInput{
+		KeyspaceName: aws.String("app"), TableName: aws.String("plain"), SchemaDefinition: sampleSchema(),
+	}); err != nil {
+		t.Fatalf("CreateTable plain: %v", err)
+	}
+
+	if _, err := client.CreateTable(ctx, &awskeyspaces.CreateTableInput{
+		KeyspaceName: aws.String("app"), TableName: aws.String("on"), SchemaDefinition: sampleSchema(),
+		Ttl:                  &kstypes.TimeToLive{Status: kstypes.TimeToLiveStatusEnabled},
+		ClientSideTimestamps: &kstypes.ClientSideTimestamps{Status: kstypes.ClientSideTimestampsStatusEnabled},
+	}); err != nil {
+		t.Fatalf("CreateTable on: %v", err)
+	}
+
+	plain, err := client.GetTable(ctx, &awskeyspaces.GetTableInput{KeyspaceName: aws.String("app"), TableName: aws.String("plain")})
+	if err != nil {
+		t.Fatalf("GetTable plain: %v", err)
+	}
+
+	if plain.Ttl != nil || plain.ClientSideTimestamps != nil {
+		t.Fatalf("plain table: ttl=%+v clientSideTimestamps=%+v, want both omitted", plain.Ttl, plain.ClientSideTimestamps)
+	}
+
+	if plain.PointInTimeRecovery == nil || plain.PointInTimeRecovery.Status != kstypes.PointInTimeRecoveryStatusDisabled {
+		t.Fatalf("plain table pointInTimeRecovery: %+v", plain.PointInTimeRecovery)
+	}
+
+	on, err := client.GetTable(ctx, &awskeyspaces.GetTableInput{KeyspaceName: aws.String("app"), TableName: aws.String("on")})
+	if err != nil {
+		t.Fatalf("GetTable on: %v", err)
+	}
+
+	if on.Ttl == nil || on.Ttl.Status != kstypes.TimeToLiveStatusEnabled ||
+		on.ClientSideTimestamps == nil || on.ClientSideTimestamps.Status != kstypes.ClientSideTimestampsStatusEnabled {
+		t.Fatalf("enabled table: ttl=%+v clientSideTimestamps=%+v", on.Ttl, on.ClientSideTimestamps)
+	}
+}
