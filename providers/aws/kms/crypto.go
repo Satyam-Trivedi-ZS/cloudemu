@@ -160,7 +160,8 @@ func (m *Mock) requireUsable(kd *keyData) error {
 	case driver.StateEnabled:
 		return nil
 	case driver.StateDisabled:
-		return driver.ErrKeyDisabled
+		// Real KMS names the key: "<key ARN> is disabled."
+		return driver.WithMessage(driver.ErrKeyDisabled, "%s is disabled.", kd.meta.ARN)
 	default:
 		return driver.ErrKeyInvalidState
 	}

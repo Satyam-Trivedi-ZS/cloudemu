@@ -151,7 +151,7 @@ func (h *Handler) describeCustomKeyStores(w http.ResponseWriter, r *http.Request
 			return nil, err
 		}
 
-		start, end, next, truncated, err := pageWindow(req.Marker, req.Limit, len(stores))
+		start, end, next, truncated, err := pageWindow(req.Marker, req.Limit, len(stores), markerInvalid)
 		if err != nil {
 			return nil, err
 		}
