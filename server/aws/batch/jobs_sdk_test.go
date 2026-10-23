@@ -289,3 +289,123 @@ func TestSDKSubmitJobEcsPropertiesOverride(t *testing.T) {
 	})
 	requireClientException(t, err, "ecs override on containerProperties definition")
 }
+
+// setupSDKMultiNode creates an EC2 queue "q-ec2" and a multinode job definition
+// "mnp" (two nodes, main node 0) next to setupSDKQueue's Fargate queue "q".
+func setupSDKMultiNode(t *testing.T, c *awsbatch.Client) {
+	t.Helper()
+
+	ctx := context.Background()
+
+	if _, err := c.CreateComputeEnvironment(ctx, &awsbatch.CreateComputeEnvironmentInput{
+		ComputeEnvironmentName: aws.String("ce-ec2"),
+		Type:                   batchtypes.CETypeManaged,
+		ComputeResources: &batchtypes.ComputeResource{
+			Type: batchtypes.CRTypeEc2, MaxvCpus: aws.Int32(16), InstanceTypes: []string{"optimal"},
+			Subnets: []string{"subnet-1111"}, SecurityGroupIds: []string{"sg-abcd"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateComputeEnvironment EC2: %v", err)
+	}
+
+	if _, err := c.CreateJobQueue(ctx, &awsbatch.CreateJobQueueInput{
+		JobQueueName: aws.String("q-ec2"), Priority: aws.Int32(1),
+		ComputeEnvironmentOrder: []batchtypes.ComputeEnvironmentOrder{
+			{Order: aws.Int32(1), ComputeEnvironment: aws.String("ce-ec2")},
+		},
+	}); err != nil {
+		t.Fatalf("CreateJobQueue EC2: %v", err)
+	}
+
+	if _, err := c.RegisterJobDefinition(ctx, &awsbatch.RegisterJobDefinitionInput{
+		JobDefinitionName: aws.String("mnp"),
+		Type:              batchtypes.JobDefinitionTypeMultinode,
+		NodeProperties: &batchtypes.NodeProperties{
+			NumNodes: aws.Int32(2), MainNode: aws.Int32(0),
+			NodeRangeProperties: []batchtypes.NodeRangeProperty{
+				{TargetNodes: aws.String("0:"), Container: &batchtypes.ContainerProperties{Image: aws.String("mpi")}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("RegisterJobDefinition multinode: %v", err)
+	}
+}
+
+func TestSDKMultiNodeJobNodes(t *testing.T) {
+	ctx := context.Background()
+	c := newBatchClient(t)
+	setupSDKQueue(t, c, nil)
+	setupSDKMultiNode(t, c)
+
+	sub, err := c.SubmitJob(ctx, &awsbatch.SubmitJobInput{
+		JobName: aws.String("mpi"), JobQueue: aws.String("q-ec2"), JobDefinition: aws.String("mnp"),
+		NodeOverrides: &batchtypes.NodeOverrides{NumNodes: aws.Int32(3)},
+	})
+	if err != nil {
+		t.Fatalf("SubmitJob multinode: %v", err)
+	}
+
+	id := aws.ToString(sub.JobId)
+
+	desc, err := c.DescribeJobs(ctx, &awsbatch.DescribeJobsInput{Jobs: []string{id, id + "#0", id + "#2", id + "#3"}})
+	if err != nil || len(desc.Jobs) != 3 {
+		t.Fatalf("DescribeJobs: %+v, %v", desc, err)
+	}
+
+	parent, main, last := desc.Jobs[0], desc.Jobs[1], desc.Jobs[2]
+	if parent.NodeDetails != nil || parent.NodeProperties == nil || aws.ToInt32(parent.NodeProperties.NumNodes) != 3 {
+		t.Fatalf("parent: nodeDetails %+v nodeProperties %+v", parent.NodeDetails, parent.NodeProperties)
+	}
+
+	if main.NodeDetails == nil || !aws.ToBool(main.NodeDetails.IsMainNode) || aws.ToInt32(main.NodeDetails.NodeIndex) != 0 ||
+		aws.ToString(main.JobId) != id+"#0" || main.Container == nil || aws.ToString(main.Container.Image) != "mpi" ||
+		main.Status != parent.Status {
+		t.Fatalf("main node: %+v", main)
+	}
+
+	if last.NodeDetails == nil || aws.ToBool(last.NodeDetails.IsMainNode) || aws.ToInt32(last.NodeDetails.NodeIndex) != 2 {
+		t.Fatalf("node #2: %+v", last.NodeDetails)
+	}
+
+	list, err := c.ListJobs(ctx, &awsbatch.ListJobsInput{MultiNodeJobId: aws.String(id), JobStatus: batchtypes.JobStatusSucceeded})
+	if err != nil || len(list.JobSummaryList) != 3 {
+		t.Fatalf("ListJobs multiNodeJobId: %+v, %v", list, err)
+	}
+
+	for i, s := range list.JobSummaryList {
+		np := s.NodeProperties
+		if np == nil || aws.ToInt32(np.NodeIndex) != int32(i) || aws.ToInt32(np.NumNodes) != 3 || aws.ToBool(np.IsMainNode) != (i == 0) {
+			t.Fatalf("summary %d nodeProperties: %+v", i, np)
+		}
+	}
+}
+
+func TestSDKSubmitJobRejectsNodeOverridesOnFargate(t *testing.T) {
+	ctx := context.Background()
+	c := newBatchClient(t)
+	setupSDKQueue(t, c, nil)
+	setupSDKMultiNode(t, c)
+
+	_, err := c.SubmitJob(ctx, &awsbatch.SubmitJobInput{
+		JobName: aws.String("x"), JobQueue: aws.String("q"), JobDefinition: aws.String("mnp"),
+		NodeOverrides: &batchtypes.NodeOverrides{NumNodes: aws.Int32(3)},
+	})
+	requireClientException(t, err, "SubmitJob nodeOverrides on a Fargate queue")
+
+	_, err = c.SubmitJob(ctx, &awsbatch.SubmitJobInput{
+		JobName: aws.String("x"), JobQueue: aws.String("q"), JobDefinition: aws.String("mnp"),
+	})
+	requireClientException(t, err, "SubmitJob multinode definition on a Fargate queue")
+
+	_, err = c.RegisterJobDefinition(ctx, &awsbatch.RegisterJobDefinitionInput{
+		JobDefinitionName: aws.String("mnp-fg"), Type: batchtypes.JobDefinitionTypeMultinode,
+		PlatformCapabilities: []batchtypes.PlatformCapability{batchtypes.PlatformCapabilityFargate},
+		NodeProperties: &batchtypes.NodeProperties{
+			NumNodes: aws.Int32(2), MainNode: aws.Int32(0),
+			NodeRangeProperties: []batchtypes.NodeRangeProperty{
+				{TargetNodes: aws.String("0:"), Container: &batchtypes.ContainerProperties{Image: aws.String("mpi")}},
+			},
+		},
+	})
+	requireClientException(t, err, "RegisterJobDefinition multinode with FARGATE")
+}

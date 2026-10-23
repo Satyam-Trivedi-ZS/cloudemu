@@ -49,6 +49,10 @@ func (m *Mock) RegisterJobDefinition(
 		return nil, err
 	}
 
+	if err := validateJobDefinitionPlatform(&in); err != nil {
+		return nil, err
+	}
+
 	m.registerMu.Lock()
 
 	cur, _ := m.jobDefMaxRev.Get(in.Name)

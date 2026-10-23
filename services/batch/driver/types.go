@@ -244,6 +244,16 @@ type ArrayProperties struct {
 	StatusSummary map[string]int32
 }
 
+// NodeDetails identifies one node of a multi-node parallel job: the node job
+// "<jobId>#<NodeIndex>" that DescribeJobs and ListJobs (multiNodeJobId) return.
+// NumNodes is the job's node count, which ListJobs reports in the node's
+// JobSummary nodeProperties; DescribeJobs reports NodeIndex and IsMainNode.
+type NodeDetails struct {
+	NodeIndex  int32
+	IsMainNode bool
+	NumNodes   int32
+}
+
 // SubmitJobInput describes a job to submit. JobQueue and JobDefinition accept
 // a name or ARN (a job definition with or without a revision). A nil ArraySize
 // submits a single (non-array) job.
@@ -270,7 +280,8 @@ type SubmitJobInput struct {
 // (JobDetail shape) at the instant it is observed. Times are epoch
 // milliseconds; zero means unset. Container, NodeProperties, EcsProperties and
 // EksProperties are the job definition's blobs (with container overrides
-// applied) carried as raw JSON.
+// applied) carried as raw JSON. NodeDetails is set only on a node of a
+// multi-node parallel job.
 type Job struct {
 	JobID                string
 	JobARN               string
@@ -284,6 +295,7 @@ type Job struct {
 	StoppedAt            int64
 	DependsOn            []JobDependency
 	ArrayProperties      *ArrayProperties
+	NodeDetails          *NodeDetails
 	Parameters           map[string]string
 	Container            json.RawMessage
 	NodeProperties       json.RawMessage
