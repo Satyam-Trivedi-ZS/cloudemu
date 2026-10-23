@@ -145,7 +145,7 @@ func TestTableLifecycleAndValidation(t *testing.T) {
 		t.Fatalf("CreateTable: %v", err)
 	}
 
-	// Default capacity mode is PAY_PER_REQUEST; PITR/TTL default DISABLED.
+	// Default capacity mode is PAY_PER_REQUEST; PITR defaults to DISABLED.
 	if tbl.CapacitySpecification.ThroughputMode != ksdriver.ThroughputPayPerRequest {
 		t.Fatalf("default throughput mode: %+v", tbl.CapacitySpecification)
 	}
