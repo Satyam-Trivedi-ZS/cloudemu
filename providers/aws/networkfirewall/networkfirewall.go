@@ -56,6 +56,7 @@ type Mock struct {
 	logging          map[string]*nfdriver.LoggingConfiguration
 	resourcePolicies map[string]string
 	opts             *config.Options
+	subnetResolver   SubnetResolver
 }
 
 // New creates a new Network Firewall mock.

@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 
+	cerrors "github.com/stackshy/cloudemu/v2/errors"
 	"github.com/stackshy/cloudemu/v2/internal/idgen"
 	acmdriver "github.com/stackshy/cloudemu/v2/services/acm/driver"
 	cloudtraildriver "github.com/stackshy/cloudemu/v2/services/cloudtrail/driver"
@@ -502,6 +503,12 @@ func (d taggedDiscovery) discoverConfig(ctx context.Context) ([]resourcediscover
 // collected rows. It factors out the identical enumerate → read-tags → row loop
 // the single-list discoverers share. The projection returns its error last so a
 // tag-read failure inside fn short-circuits the walk with that error.
+//
+// A NotFound from fn means the resource was deleted between the list call and
+// its tag read. It is skipped, the same as a resource that was never listed,
+// so a delete racing GetResources doesn't fail the whole inventory (the
+// resourcediscovery walkers handle this race the same way). Any other error
+// still propagates.
 func project[T any](ctx context.Context, items []T,
 	fn func(context.Context, T) (resourcediscovery.DiscoveredResource, error),
 ) ([]resourcediscovery.DiscoveredResource, error) {
@@ -509,6 +516,10 @@ func project[T any](ctx context.Context, items []T,
 
 	for i := range items {
 		r, err := fn(ctx, items[i])
+		if cerrors.IsNotFound(err) {
+			continue
+		}
+
 		if err != nil {
 			return nil, err
 		}

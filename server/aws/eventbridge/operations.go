@@ -20,6 +20,12 @@ type entryPublisher interface {
 	PutEventEntries(ctx context.Context, events []ebdriver.Event) ([]ebdriver.PutEventsEntryResult, error)
 }
 
+// endpointPublisher is the AWS-specific PutEvents surface for a request sent
+// through a global endpoint (EndpointId set).
+type endpointPublisher interface {
+	PutEndpointEventEntries(ctx context.Context, endpointID string, events []ebdriver.Event) ([]ebdriver.PutEventsEntryResult, error)
+}
+
 // --- event buses ---
 
 func (h *Handler) createEventBus(w http.ResponseWriter, r *http.Request) {
@@ -29,9 +35,10 @@ func (h *Handler) createEventBus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	info, err := h.bus.CreateEventBus(r.Context(), ebdriver.EventBusConfig{
-		Name:        req.Name,
-		Tags:        tagsToMap(req.Tags),
-		Description: req.Description,
+		Name:            req.Name,
+		Tags:            tagsToMap(req.Tags),
+		Description:     req.Description,
+		EventSourceName: req.EventSourceName,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -327,26 +334,18 @@ func (h *Handler) putEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events := make([]ebdriver.Event, len(req.Entries))
-
-	for i := range req.Entries {
-		e := &req.Entries[i]
-		events[i] = ebdriver.Event{
-			Source:     e.Source,
-			DetailType: e.DetailType,
-			Detail:     e.Detail,
-			EventBus:   busNameOrDefault(e.EventBusName),
-			Resources:  e.Resources,
-			Time:       entryTime(e.Time),
-		}
-	}
-
-	results, err := publisher.PutEventEntries(r.Context(), events)
+	results, err := h.publishEntries(r.Context(), publisher, &req)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 
+	writeEntryResults(w, results)
+}
+
+// writeEntryResults answers a PutEvents or PutPartnerEvents call with each
+// entry's outcome and the count of failed entries.
+func writeEntryResults(w http.ResponseWriter, results []ebdriver.PutEventsEntryResult) {
 	resp := putEventsResponse{Entries: make([]putEventsResultEntry, len(results))}
 	for i, res := range results {
 		resp.Entries[i] = putEventsResultEntry{EventID: res.EventID, ErrorCode: res.ErrorCode, ErrorMessage: res.ErrorMessage}
@@ -356,6 +355,41 @@ func (h *Handler) putEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wire.WriteJSON(w, resp)
+}
+
+// publishEntries hands the request's entries to the provider. Through a global
+// endpoint the entries keep their EventBusName as sent, since the endpoint
+// decides where an entry without one goes.
+func (h *Handler) publishEntries(
+	ctx context.Context, publisher entryPublisher, req *putEventsRequest,
+) ([]ebdriver.PutEventsEntryResult, error) {
+	viaEndpoint := req.EndpointID != ""
+	events := make([]ebdriver.Event, len(req.Entries))
+
+	for i := range req.Entries {
+		e := &req.Entries[i]
+
+		bus := e.EventBusName
+		if !viaEndpoint {
+			bus = busNameOrDefault(bus)
+		}
+
+		events[i] = ebdriver.Event{
+			Source: e.Source, DetailType: e.DetailType, Detail: e.Detail,
+			EventBus: bus, Resources: e.Resources, Time: entryTime(e.Time),
+		}
+	}
+
+	if !viaEndpoint {
+		return publisher.PutEventEntries(ctx, events)
+	}
+
+	ep, ok := h.bus.(endpointPublisher)
+	if !ok {
+		return nil, cerrors.New(cerrors.Unimplemented, "global endpoints not supported")
+	}
+
+	return ep.PutEndpointEventEntries(ctx, req.EndpointID, events)
 }
 
 // testEventPattern evaluates a sample event against an event pattern using the

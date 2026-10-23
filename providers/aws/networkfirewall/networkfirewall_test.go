@@ -14,6 +14,7 @@ import (
 	"github.com/stackshy/cloudemu/v2/config"
 	cerrors "github.com/stackshy/cloudemu/v2/errors"
 	nfdriver "github.com/stackshy/cloudemu/v2/services/networkfirewall/driver"
+	netdriver "github.com/stackshy/cloudemu/v2/services/networking/driver"
 )
 
 func newMock() *Mock { return New(config.NewOptions()) }
@@ -389,3 +390,112 @@ func TestSnapshot_FirewallWithoutSubnetDetailsGetsZones(t *testing.T) {
 // seedZone is the Availability Zone the emulator assigns "subnet-1", the subnet
 // every seeded firewall is attached to.
 var seedZone = zoneForKey("us-east-1", "subnet-1")
+
+// fakeSubnets answers DescribeSubnets from a fixed subnet-to-zone map.
+type fakeSubnets map[string]string
+
+func (f fakeSubnets) DescribeSubnets(_ context.Context, ids []string) ([]netdriver.SubnetInfo, error) {
+	var out []netdriver.SubnetInfo
+
+	for _, id := range ids {
+		if az, ok := f[id]; ok {
+			out = append(out, netdriver.SubnetInfo{ID: id, AvailabilityZone: az})
+		}
+	}
+
+	return out, nil
+}
+
+func TestSubnets_ZoneIsTheSubnetsRealZone(t *testing.T) {
+	m := newMock()
+	m.SetSubnetResolver(fakeSubnets{"subnet-a": "us-east-1a", "subnet-b": "us-east-1b", "subnet-c": "us-east-1c"})
+
+	pol := seedPolicy(t, m, "pol-1")
+
+	fw, err := m.CreateFirewall(bg, nfdriver.CreateFirewallConfig{
+		Name: "fw-real", PolicyARN: pol.ARN, VPCID: "vpc-1a2b", SubnetIDs: []string{"subnet-a", "subnet-b"},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "us-east-1a", fw.SubnetDetails["subnet-a"].AvailabilityZone)
+	assert.Equal(t, "us-east-1b", fw.SubnetDetails["subnet-b"].AvailabilityZone)
+	assert.NotEqual(t, fw.SubnetDetails["subnet-a"].EndpointID, fw.SubnetDetails["subnet-b"].EndpointID)
+
+	// A one-subnet firewall in us-east-1c takes flow operations for us-east-1c.
+	one, err := m.CreateFirewall(bg, nfdriver.CreateFirewallConfig{
+		Name: "fw-one", PolicyARN: pol.ARN, VPCID: "vpc-1a2b", SubnetIDs: []string{"subnet-c"},
+	})
+	require.NoError(t, err)
+
+	_, err = m.StartFlowCapture(bg, nfdriver.FlowOperationRequest{FirewallARN: one.ARN, AvailabilityZone: "us-east-1c"})
+	require.NoError(t, err)
+
+	meta, err := m.DescribeFirewallMetadata(bg, one.ARN)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"us-east-1c"}, meta.AvailabilityZones)
+
+	// A VPC endpoint association for an unattached known subnet reports its real zone.
+	assoc, err := m.CreateVpcEndpointAssociation(bg, nfdriver.CreateVPCEndpointAssociationConfig{
+		FirewallARN: one.ARN, VPCID: "vpc-1a2b", SubnetID: "subnet-a",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "us-east-1a", assoc.AvailabilityZone)
+}
+
+func TestSubnets_SecondSubnetInUsedZoneRefused(t *testing.T) {
+	m := newMock()
+	m.SetSubnetResolver(fakeSubnets{"subnet-a": "us-east-1a", "subnet-a2": "us-east-1a", "subnet-b": "us-east-1b"})
+
+	pol := seedPolicy(t, m, "pol-1")
+
+	_, err := m.CreateFirewall(bg, nfdriver.CreateFirewallConfig{
+		Name: "fw-dup", PolicyARN: pol.ARN, VPCID: "vpc-1a2b", SubnetIDs: []string{"subnet-a", "subnet-a2"},
+	})
+	require.True(t, cerrors.IsInvalidArgument(err), "got %v", err)
+
+	fw, err := m.CreateFirewall(bg, nfdriver.CreateFirewallConfig{
+		Name: "fw-ok", PolicyARN: pol.ARN, VPCID: "vpc-1a2b", SubnetIDs: []string{"subnet-a"},
+	})
+	require.NoError(t, err)
+
+	_, err = m.AssociateSubnets(bg, "fw-ok", []nfdriver.SubnetMapping{{SubnetID: "subnet-a2"}}, "")
+	require.True(t, cerrors.IsInvalidArgument(err), "got %v", err)
+
+	got, err := m.AssociateSubnets(bg, "fw-ok", []nfdriver.SubnetMapping{{SubnetID: "subnet-b"}}, "")
+	require.NoError(t, err)
+	assert.Equal(t, "us-east-1b", got.SubnetDetails["subnet-b"].AvailabilityZone)
+
+	// The refused create left nothing behind, and the rejected associate kept the token.
+	_, err = m.DescribeFirewall(bg, "fw-dup", "")
+	assert.True(t, cerrors.IsNotFound(err))
+	assert.NotEqual(t, fw.UpdateToken, got.UpdateToken)
+}
+
+func TestSubnets_UnknownSubnetFallsBackToIDZone(t *testing.T) {
+	m := newMock()
+	m.SetSubnetResolver(fakeSubnets{"subnet-a": "us-east-1a"})
+
+	pol := seedPolicy(t, m, "pol-1")
+
+	fw, err := m.CreateFirewall(bg, nfdriver.CreateFirewallConfig{
+		Name: "fw-mix", PolicyARN: pol.ARN, VPCID: "vpc-1a2b", SubnetIDs: []string{"subnet-a", "subnet-unknown"},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "us-east-1a", fw.SubnetDetails["subnet-a"].AvailabilityZone)
+	assert.NotEmpty(t, fw.SubnetDetails["subnet-unknown"].AvailabilityZone)
+	assert.NotEqual(t, "us-east-1a", fw.SubnetDetails["subnet-unknown"].AvailabilityZone)
+}
+
+func TestZoneEndpoints_TransitGatewayZonesShareTheSubnetShape(t *testing.T) {
+	m := newMock()
+	pol := seedPolicy(t, m, "pol-1")
+
+	fw, err := m.CreateFirewall(bg, nfdriver.CreateFirewallConfig{
+		Name: "fw-tgw", PolicyARN: pol.ARN, TransitGatewayID: "tgw-0abc", AvailabilityZones: []string{"us-east-1a", "us-east-1b"},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "vpce-"+fw.ID+"-a", fw.ZoneEndpoints["us-east-1a"])
+	assert.Equal(t, "vpce-"+fw.ID+"-b", fw.ZoneEndpoints["us-east-1b"])
+}

@@ -82,6 +82,10 @@ type EventBusConfig struct {
 	// Description is the caller-supplied free-text description of the event
 	// bus (EventBridge CreateEventBus's Description). Empty for Azure and GCP.
 	Description string
+	// EventSourceName is the partner event source a partner event bus is
+	// matched to (EventBridge CreateEventBus's EventSourceName). Empty for a
+	// custom event bus, and for Azure and GCP.
+	EventSourceName string
 }
 
 // Rule defines an event routing rule with filtering.
@@ -120,6 +124,10 @@ type Target struct {
 	InputTransformer string // raw JSON InputTransformer block
 	DeadLetterConfig string // raw JSON DeadLetterConfig block
 	RetryPolicy      string // raw JSON RetryPolicy block
+	// HTTPParameters is the raw JSON HttpParameters block (path parameter
+	// values, headers and query string) for API destination and API Gateway
+	// targets. Empty for other targets.
+	HTTPParameters string
 }
 
 // Event represents an event to publish.

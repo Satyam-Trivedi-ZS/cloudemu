@@ -464,6 +464,10 @@ func newProvider(o *config.Options, shared *GlobalServices) *Provider {
 	// EFS mount targets derive their VpcId and AZ from the subnet, so all mount
 	// targets of a file system share a VpcId and each reflects its subnet's zone.
 	p.EFS.SetSubnetResolver(p.VPC)
+	// A firewall's subnets sit in the zones the subnets really are in, and a firewall
+	// takes at most one subnet per zone.
+	p.NetworkFirewall.SetSubnetResolver(p.VPC)
+	p.EFS.SetMonitoring(p.CloudWatch)
 	// An IamInstanceProfile passed to RunInstances resolves through IAM so the
 	// role->profile->instance chain reads back on DescribeInstances.
 	p.EC2.SetInstanceProfileResolver(p.IAM)
@@ -569,6 +573,8 @@ func wirePostBuildServices(o *config.Options, p *Provider) {
 	// subscription filter's pattern are delivered (gzipped awslogs payload) to
 	// the filter's Lambda destination on PutLogEvents.
 	p.CloudWatchLogs.SetLambdaInvoker(p.Lambda)
+	// CloudWatch Logs export tasks write log events to an S3 bucket.
+	p.CloudWatchLogs.SetExportStore(p.S3)
 	// CloudFormation is an orchestrator: it provisions each stack resource by
 	// calling the matching service driver, so its registry is built from the
 	// live mocks rather than a store of its own.
@@ -634,7 +640,9 @@ func awsDrivers(p *Provider) *resourcediscovery.Drivers {
 // background ticker calls each one on its interval. New time-driven services
 // register here.
 func (p *Provider) Tickables() []config.Tickable {
-	return []config.Tickable{p.CloudWatch, p.SSM, p.CloudFormation}
+	// EFS runs before CloudWatch so the alarms evaluated in the same tick see
+	// the AWS/EFS metrics it just published.
+	return []config.Tickable{p.EFS, p.CloudWatch, p.SSM, p.CloudFormation}
 }
 
 // Close tears down any real engines wired into the provider via

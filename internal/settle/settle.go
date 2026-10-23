@@ -70,11 +70,16 @@ const (
 
 	DefaultLatticeSettle = 2 * time.Second // VPC Lattice resource CREATE_IN_PROGRESS->ACTIVE
 
+	DefaultEventBridgeEndpointSettle = 2 * time.Second // EventBridge global endpoint CREATING/UPDATING->ACTIVE
+
 	DefaultBedrockFlowExecutionSettle = 2 * time.Second // Bedrock flow execution Running->Succeeded
 
 	DefaultBedrockIngestionSettle = 2 * time.Second // Bedrock KB ingestion job IN_PROGRESS->COMPLETE
 
 	DefaultFlowOperationSettle = 2 * time.Second // Network Firewall flow operation IN_PROGRESS->COMPLETED
+
+	DefaultExportTaskPendingSettle = 1 * time.Second // CloudWatch Logs export task PENDING->RUNNING
+	DefaultExportTaskRunSettle     = 2 * time.Second // CloudWatch Logs export task RUNNING->COMPLETED
 
 	// S3 RestoreObject ongoing-request="true"->"false", by retrieval tier.
 	DefaultRestoreExpeditedSettle = 1 * time.Second

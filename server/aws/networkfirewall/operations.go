@@ -85,7 +85,7 @@ func toFirewallStatusJSON(f *nfdriver.Firewall) firewallStatusJSON {
 	}
 
 	for _, az := range f.AvailabilityZones {
-		states[az] = syncStateJSON{Attachment: attachmentJSON{EndpointID: "vpce-" + f.ID + "-" + az, Status: "READY"}}
+		states[az] = syncStateJSON{Attachment: attachmentJSON{EndpointID: f.ZoneEndpoints[az], Status: "READY"}}
 	}
 
 	if len(states) == 0 {

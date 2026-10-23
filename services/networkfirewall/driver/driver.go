@@ -24,6 +24,7 @@ type Firewall struct {
 	SubnetIDs                        []string
 	SubnetDetails                    map[string]SubnetDetail
 	AvailabilityZones                []string
+	ZoneEndpoints                    map[string]string
 	TransitGatewayID                 string
 	Description                      string
 	DeleteProtection                 bool

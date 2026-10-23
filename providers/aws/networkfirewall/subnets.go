@@ -1,6 +1,7 @@
 package networkfirewall
 
 import (
+	"context"
 	"hash/fnv"
 
 	cerrors "github.com/stackshy/cloudemu/v2/errors"
@@ -20,16 +21,14 @@ func zoneForKey(region, key string) string {
 	return region + string(azLetters[int(h.Sum32()%uint32(len(azLetters)))])
 }
 
-// assignSubnet records a subnet's zone and endpoint on the firewall. A firewall
-// has at most one subnet per zone, so when the preferred zone is taken the next
-// free one is used. The assignment is stored and never recomputed.
-func (m *Mock) assignSubnet(fw *nfdriver.Firewall, subnetID, ipType string) error {
+// assignSubnet records a subnet's zone and endpoint on the firewall. The zone is
+// the one the subnet really sits in when the networking mock knows it, and a
+// firewall has at most one subnet per zone, as in AWS. For a subnet the
+// networking mock does not know the zone is derived from the id (the next free
+// zone if that one is taken). The assignment is stored and never recomputed.
+func (m *Mock) assignSubnet(ctx context.Context, fw *nfdriver.Firewall, subnetID, ipType string) error {
 	if fw.SubnetDetails == nil {
 		fw.SubnetDetails = map[string]nfdriver.SubnetDetail{}
-	}
-
-	if len(fw.SubnetDetails) >= len(azLetters) {
-		return invalid("a firewall can have at most %d subnets, one per Availability Zone", len(azLetters))
 	}
 
 	used := make(map[string]bool, len(fw.SubnetDetails))
@@ -37,10 +36,20 @@ func (m *Mock) assignSubnet(fw *nfdriver.Firewall, subnetID, ipType string) erro
 		used[d.AvailabilityZone] = true
 	}
 
-	zone := zoneForKey(m.opts.Region, subnetID)
+	zone := m.resolveZone(ctx, subnetID)
 
-	for i := 0; used[zone] && i < len(azLetters); i++ {
-		zone = m.opts.Region + string(azLetters[(indexOfLetter(zone)+1)%len(azLetters)])
+	switch {
+	case zone != "" && used[zone]:
+		return invalid("firewall %q already has a subnet in Availability Zone %q", fw.Name, zone)
+	case zone != "":
+	case len(fw.SubnetDetails) >= len(azLetters):
+		return invalid("a firewall can have at most %d subnets, one per Availability Zone", len(azLetters))
+	default:
+		zone = zoneForKey(m.opts.Region, subnetID)
+
+		for i := 0; used[zone] && i < len(azLetters); i++ {
+			zone = m.opts.Region + string(azLetters[(indexOfLetter(zone)+1)%len(azLetters)])
+		}
 	}
 
 	fw.SubnetDetails[subnetID] = nfdriver.SubnetDetail{
@@ -107,6 +116,21 @@ func cloneSubnetDetails(in map[string]nfdriver.SubnetDetail) map[string]nfdriver
 	out := make(map[string]nfdriver.SubnetDetail, len(in))
 	for k, v := range in {
 		out[k] = v
+	}
+
+	return out
+}
+
+// zoneEndpoints names the endpoint of each Availability Zone of a transit
+// gateway-attached firewall, in the same shape as a subnet's endpoint id.
+func zoneEndpoints(fw *nfdriver.Firewall) map[string]string {
+	if len(fw.AvailabilityZones) == 0 {
+		return nil
+	}
+
+	out := make(map[string]string, len(fw.AvailabilityZones))
+	for _, z := range fw.AvailabilityZones {
+		out[z] = endpointID(fw.ID, z)
 	}
 
 	return out

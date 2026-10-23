@@ -17,7 +17,7 @@ var (
 )
 
 //nolint:gocritic // cfg matches the driver signature.
-func (m *Mock) CreateFirewall(_ context.Context, cfg nfdriver.CreateFirewallConfig) (*nfdriver.Firewall, error) {
+func (m *Mock) CreateFirewall(ctx context.Context, cfg nfdriver.CreateFirewallConfig) (*nfdriver.Firewall, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -48,7 +48,7 @@ func (m *Mock) CreateFirewall(_ context.Context, cfg nfdriver.CreateFirewallConf
 			continue
 		}
 
-		if err := m.assignSubnet(fw, s, cfg.SubnetIPTypes[s]); err != nil {
+		if err := m.assignSubnet(ctx, fw, s, cfg.SubnetIPTypes[s]); err != nil {
 			return nil, err
 		}
 
@@ -253,6 +253,7 @@ func (m *Mock) outFirewall(f *nfdriver.Firewall) *nfdriver.Firewall {
 	out.SubnetIDs = cloneStrings(f.SubnetIDs)
 	out.SubnetDetails = cloneSubnetDetails(f.SubnetDetails)
 	out.AvailabilityZones = cloneStrings(f.AvailabilityZones)
+	out.ZoneEndpoints = zoneEndpoints(f)
 	out.EnabledAnalysisTypes = cloneStrings(f.EnabledAnalysisTypes)
 	out.Tags = copyTags(f.Tags)
 	out.NumberOfAssociations = m.associationCount(f.ARN)
@@ -321,7 +322,7 @@ func (m *Mock) AssociateFirewallPolicy(_ context.Context, firewallName, policyAR
 
 // AssociateSubnets adds subnet mappings to a VPC-attached firewall.
 func (m *Mock) AssociateSubnets(
-	_ context.Context,
+	ctx context.Context,
 	firewallName string,
 	subnets []nfdriver.SubnetMapping,
 	updateToken string,
@@ -350,7 +351,7 @@ func (m *Mock) AssociateSubnets(
 				continue
 			}
 
-			if err := m.assignSubnet(fw, s.SubnetID, s.IPAddressType); err != nil {
+			if err := m.assignSubnet(ctx, fw, s.SubnetID, s.IPAddressType); err != nil {
 				return err
 			}
 

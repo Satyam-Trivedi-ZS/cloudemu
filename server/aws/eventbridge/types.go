@@ -21,9 +21,10 @@ type tagJSON struct {
 // --- request envelopes ---
 
 type createEventBusRequest struct {
-	Name        string    `json:"Name"`
-	Description string    `json:"Description"`
-	Tags        []tagJSON `json:"Tags"`
+	Name            string    `json:"Name"`
+	EventSourceName string    `json:"EventSourceName"`
+	Description     string    `json:"Description"`
+	Tags            []tagJSON `json:"Tags"`
 }
 
 type nameRequest struct {
@@ -67,6 +68,7 @@ type targetJSON struct {
 	InputTransformer json.RawMessage `json:"InputTransformer,omitempty"`
 	DeadLetterConfig json.RawMessage `json:"DeadLetterConfig,omitempty"`
 	RetryPolicy      json.RawMessage `json:"RetryPolicy,omitempty"`
+	HTTPParameters   json.RawMessage `json:"HttpParameters,omitempty"`
 }
 
 type putTargetsRequest struct {
@@ -102,6 +104,8 @@ type putEventsEntry struct {
 
 type putEventsRequest struct {
 	Entries []putEventsEntry `json:"Entries"`
+	// EndpointID names the global endpoint the request was sent through.
+	EndpointID string `json:"EndpointId"`
 }
 
 type testEventPatternRequest struct {
@@ -328,6 +332,10 @@ func toTargetJSON(t *ebdriver.Target) targetJSON {
 		out.RetryPolicy = json.RawMessage(t.RetryPolicy)
 	}
 
+	if t.HTTPParameters != "" {
+		out.HTTPParameters = json.RawMessage(t.HTTPParameters)
+	}
+
 	return out
 }
 
@@ -341,5 +349,6 @@ func fromTargetJSON(t *targetJSON) ebdriver.Target {
 		InputTransformer: string(t.InputTransformer),
 		DeadLetterConfig: string(t.DeadLetterConfig),
 		RetryPolicy:      string(t.RetryPolicy),
+		HTTPParameters:   string(t.HTTPParameters),
 	}
 }

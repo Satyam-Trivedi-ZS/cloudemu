@@ -10,7 +10,7 @@ import (
 
 //nolint:gocritic // cfg matches the driver signature.
 func (m *Mock) CreateVpcEndpointAssociation(
-	_ context.Context, cfg nfdriver.CreateVPCEndpointAssociationConfig,
+	ctx context.Context, cfg nfdriver.CreateVPCEndpointAssociationConfig,
 ) (*nfdriver.VPCEndpointAssociation, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -52,7 +52,7 @@ func (m *Mock) CreateVpcEndpointAssociation(
 		VPCID:            cfg.VPCID,
 		SubnetID:         cfg.SubnetID,
 		IPAddressType:    cfg.IPAddressType,
-		AvailabilityZone: m.associationZone(fw, cfg.SubnetID),
+		AvailabilityZone: m.associationZone(ctx, fw, cfg.SubnetID),
 		Description:      cfg.Description,
 		Status:           statusReady,
 		Tags:             copyTags(cfg.Tags),
@@ -158,10 +158,15 @@ func cloneAssociation(a *nfdriver.VPCEndpointAssociation) *nfdriver.VPCEndpointA
 }
 
 // associationZone is the Availability Zone of an association's subnet: the zone
-// the firewall already assigned that subnet, else the zone its id maps to.
-func (m *Mock) associationZone(fw *nfdriver.Firewall, subnetID string) string {
+// the firewall already assigned that subnet, else its real zone, else the zone
+// its id maps to.
+func (m *Mock) associationZone(ctx context.Context, fw *nfdriver.Firewall, subnetID string) string {
 	if d, ok := fw.SubnetDetails[subnetID]; ok {
 		return d.AvailabilityZone
+	}
+
+	if zone := m.resolveZone(ctx, subnetID); zone != "" {
+		return zone
 	}
 
 	return zoneForKey(m.opts.Region, subnetID)

@@ -224,7 +224,7 @@ func ensureActive(status *string) {
 func (m *Mock) backfillSubnets(f *nfdriver.Firewall) {
 	for _, s := range f.SubnetIDs {
 		if _, ok := f.SubnetDetails[s]; !ok {
-			_ = m.assignSubnet(f, s, "")
+			_ = m.assignSubnet(context.Background(), f, s, "")
 		}
 	}
 }

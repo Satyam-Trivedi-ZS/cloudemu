@@ -7478,6 +7478,10 @@
       },
       {
         "name": "UpdateFileSystem"
+      },
+      {
+        "name": "UpdateFileSystemProtection",
+        "doc": "UpdateFileSystemProtection sets the replication-overwrite protection. An"
       }
     ],
     "optionalCapabilities": [
@@ -10669,8 +10673,14 @@
         "name": "CancelKeyDeletion"
       },
       {
+        "name": "ConnectCustomKeyStore"
+      },
+      {
         "name": "CreateAlias",
         "doc": "Aliases."
+      },
+      {
+        "name": "CreateCustomKeyStore"
       },
       {
         "name": "CreateGrant",
@@ -10687,7 +10697,17 @@
         "name": "DeleteAlias"
       },
       {
+        "name": "DeleteCustomKeyStore"
+      },
+      {
         "name": "DeleteImportedKeyMaterial"
+      },
+      {
+        "name": "DeriveSharedSecret"
+      },
+      {
+        "name": "DescribeCustomKeyStores",
+        "doc": "DescribeCustomKeyStores returns every store, or only the one matching id"
       },
       {
         "name": "DescribeKey"
@@ -10697,6 +10717,9 @@
       },
       {
         "name": "DisableKeyRotation"
+      },
+      {
+        "name": "DisconnectCustomKeyStore"
       },
       {
         "name": "EnableKey"
@@ -10725,6 +10748,10 @@
       },
       {
         "name": "GenerateRandom"
+      },
+      {
+        "name": "GenerateRandomInCustomKeyStore",
+        "doc": "GenerateRandomInCustomKeyStore serves GenerateRandom with a CustomKeyStoreId."
       },
       {
         "name": "GetKeyPolicy",
@@ -10798,6 +10825,9 @@
         "name": "UpdateAlias"
       },
       {
+        "name": "UpdateCustomKeyStore"
+      },
+      {
         "name": "UpdateKeyDescription"
       },
       {
@@ -10817,6 +10847,9 @@
         "operations": [
           {
             "name": "Decrypt"
+          },
+          {
+            "name": "DeriveSharedSecret"
           },
           {
             "name": "Encrypt"
@@ -10853,6 +10886,35 @@
           },
           {
             "name": "VerifyMac"
+          }
+        ]
+      },
+      {
+        "name": "CustomKeyStores",
+        "doc": "CustomKeyStores is the custom key store surface of KMS.",
+        "operations": [
+          {
+            "name": "ConnectCustomKeyStore"
+          },
+          {
+            "name": "CreateCustomKeyStore"
+          },
+          {
+            "name": "DeleteCustomKeyStore"
+          },
+          {
+            "name": "DescribeCustomKeyStores",
+            "doc": "DescribeCustomKeyStores returns every store, or only the one matching id"
+          },
+          {
+            "name": "DisconnectCustomKeyStore"
+          },
+          {
+            "name": "GenerateRandomInCustomKeyStore",
+            "doc": "GenerateRandomInCustomKeyStore serves GenerateRandom with a CustomKeyStoreId."
+          },
+          {
+            "name": "UpdateCustomKeyStore"
           }
         ]
       },
@@ -11567,7 +11629,20 @@
             "doc": "AssociateKmsKey and DisassociateKmsKey target exactly one of a log group"
           },
           {
+            "name": "CancelExportTask"
+          },
+          {
             "name": "CreateAWSLogGroup"
+          },
+          {
+            "name": "CreateExportTask",
+            "doc": "Export tasks write a log group's events to an S3 bucket. A task moves"
+          },
+          {
+            "name": "DeleteAccountPolicy"
+          },
+          {
+            "name": "DeleteDataProtectionPolicy"
           },
           {
             "name": "DeleteRetentionPolicy"
@@ -11577,23 +11652,48 @@
             "doc": "DescribeAWSMetricFilters lists metric filters, sorted by filter name."
           },
           {
+            "name": "DescribeAccountPolicies"
+          },
+          {
+            "name": "DescribeExportTasks"
+          },
+          {
             "name": "DescribeQueries"
           },
           {
             "name": "DisassociateKmsKey"
           },
           {
+            "name": "FilterAWSLogEvents"
+          },
+          {
+            "name": "GetAWSLogEvents",
+            "doc": "GetAWSLogEvents and FilterAWSLogEvents are GetLogEvents and"
+          },
+          {
+            "name": "GetDataProtectionPolicy"
+          },
+          {
             "name": "GetLogGroupFields",
             "doc": "GetLogGroupFields samples the 8 minutes either side of at, or the last"
           },
           {
-            "name": "GetLogRecord"
+            "name": "GetLogRecord",
+            "doc": "GetLogRecord returns the masked record unless unmask is set."
           },
           {
             "name": "GetQueryResults"
           },
           {
             "name": "ListAWSLogGroups"
+          },
+          {
+            "name": "PutAccountPolicy",
+            "doc": "Account policies apply to every log group in the account, or to the"
+          },
+          {
+            "name": "PutDataProtectionPolicy",
+            "doc": "Data protection policies take a log group name or ARN. Masking applies"
           },
           {
             "name": "PutLogEventsWithResult"
