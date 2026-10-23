@@ -47,9 +47,11 @@ func (m *Mock) Snapshot(_ context.Context, _ bool) (json.RawMessage, error) {
 		*d.dst = b
 	}
 
+	// Copy the tag maps under the lock: json.Marshal runs after the unlock, and
+	// TagResource mutates the inner maps in place.
 	m.mu.RLock()
 	if len(m.tags) > 0 {
-		snap.Tags = m.tags
+		snap.Tags = copyTagMaps(m.tags)
 	}
 	m.mu.RUnlock()
 
@@ -86,9 +88,58 @@ func (m *Mock) Restore(_ context.Context, data json.RawMessage) error {
 
 	if snap.Tags != nil {
 		m.mu.Lock()
-		m.tags = snap.Tags
+		m.tags = m.canonicalTagsLocked(snap.Tags)
 		m.mu.Unlock()
 	}
 
 	return nil
+}
+
+// canonicalTagsLocked keys restored tags by the canonical ARN of the keyspace
+// or table they belong to. Tag reads and writes resolve to the canonical ARN,
+// but an older build stored tags under whatever ARN the caller passed (for
+// example the slash-less table form) and accepted ARNs of resources that don't
+// exist. A non-canonical entry for an existing resource is merged into the
+// canonical one, with the canonical entry's values winning on a key clash. An
+// entry that names no existing resource is dropped: no API can reach it, and
+// keeping it would hand its tags to a resource created later under that ARN.
+// The caller holds the write lock, and the stores are already restored.
+func (m *Mock) canonicalTagsLocked(in map[string]map[string]string) map[string]map[string]string {
+	out := make(map[string]map[string]string, len(in))
+
+	for arn, tags := range in {
+		if m.existingResourceARN(arn) == arn {
+			out[arn] = copyTags(tags)
+		}
+	}
+
+	for arn, tags := range in {
+		canonical := m.existingResourceARN(arn)
+		if canonical == "" || canonical == arn || arn+"/" != canonical {
+			continue
+		}
+
+		cur := out[canonical]
+		if cur == nil {
+			cur = make(map[string]string, len(tags))
+			out[canonical] = cur
+		}
+
+		for k, v := range tags {
+			if _, ok := cur[k]; !ok {
+				cur[k] = v
+			}
+		}
+	}
+
+	return out
+}
+
+func copyTagMaps(in map[string]map[string]string) map[string]map[string]string {
+	out := make(map[string]map[string]string, len(in))
+	for arn, tags := range in {
+		out[arn] = copyTags(tags)
+	}
+
+	return out
 }
