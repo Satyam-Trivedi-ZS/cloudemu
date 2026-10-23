@@ -10669,8 +10669,14 @@
         "name": "CancelKeyDeletion"
       },
       {
+        "name": "ConnectCustomKeyStore"
+      },
+      {
         "name": "CreateAlias",
         "doc": "Aliases."
+      },
+      {
+        "name": "CreateCustomKeyStore"
       },
       {
         "name": "CreateGrant",
@@ -10687,7 +10693,17 @@
         "name": "DeleteAlias"
       },
       {
+        "name": "DeleteCustomKeyStore"
+      },
+      {
         "name": "DeleteImportedKeyMaterial"
+      },
+      {
+        "name": "DeriveSharedSecret"
+      },
+      {
+        "name": "DescribeCustomKeyStores",
+        "doc": "DescribeCustomKeyStores returns every store, or only the one matching id"
       },
       {
         "name": "DescribeKey"
@@ -10697,6 +10713,9 @@
       },
       {
         "name": "DisableKeyRotation"
+      },
+      {
+        "name": "DisconnectCustomKeyStore"
       },
       {
         "name": "EnableKey"
@@ -10725,6 +10744,10 @@
       },
       {
         "name": "GenerateRandom"
+      },
+      {
+        "name": "GenerateRandomInCustomKeyStore",
+        "doc": "GenerateRandomInCustomKeyStore serves GenerateRandom with a CustomKeyStoreId."
       },
       {
         "name": "GetKeyPolicy",
@@ -10798,6 +10821,9 @@
         "name": "UpdateAlias"
       },
       {
+        "name": "UpdateCustomKeyStore"
+      },
+      {
         "name": "UpdateKeyDescription"
       },
       {
@@ -10817,6 +10843,9 @@
         "operations": [
           {
             "name": "Decrypt"
+          },
+          {
+            "name": "DeriveSharedSecret"
           },
           {
             "name": "Encrypt"
@@ -10853,6 +10882,35 @@
           },
           {
             "name": "VerifyMac"
+          }
+        ]
+      },
+      {
+        "name": "CustomKeyStores",
+        "doc": "CustomKeyStores is the custom key store surface of KMS.",
+        "operations": [
+          {
+            "name": "ConnectCustomKeyStore"
+          },
+          {
+            "name": "CreateCustomKeyStore"
+          },
+          {
+            "name": "DeleteCustomKeyStore"
+          },
+          {
+            "name": "DescribeCustomKeyStores",
+            "doc": "DescribeCustomKeyStores returns every store, or only the one matching id"
+          },
+          {
+            "name": "DisconnectCustomKeyStore"
+          },
+          {
+            "name": "GenerateRandomInCustomKeyStore",
+            "doc": "GenerateRandomInCustomKeyStore serves GenerateRandom with a CustomKeyStoreId."
+          },
+          {
+            "name": "UpdateCustomKeyStore"
           }
         ]
       },
