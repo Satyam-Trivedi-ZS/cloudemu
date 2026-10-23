@@ -598,6 +598,7 @@ func wireLifecycleEvents(p *Provider) {
 	p.Glue.SetEventPublisher(p.EventBridge)
 	p.CloudWatch.SetEventPublisher(p.EventBridge)
 	p.SageMaker.SetEventPublisher(p.EventBridge)
+	p.Batch.SetEventPublisher(p.EventBridge)
 }
 
 // awsDrivers assembles the resource-discovery driver set from the provider's
@@ -639,7 +640,7 @@ func awsDrivers(p *Provider) *resourcediscovery.Drivers {
 func (p *Provider) Tickables() []config.Tickable {
 	// SQS and EFS run before CloudWatch so the alarms evaluated in the same
 	// tick see the queue gauges and AWS/EFS metrics they just published.
-	return []config.Tickable{p.SQS, p.EFS, p.CloudWatch, p.SSM, p.CloudFormation}
+	return []config.Tickable{p.SQS, p.EFS, p.CloudWatch, p.SSM, p.CloudFormation, p.Batch}
 }
 
 // Close tears down any real engines wired into the provider via
