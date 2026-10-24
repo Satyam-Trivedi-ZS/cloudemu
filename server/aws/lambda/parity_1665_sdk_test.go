@@ -148,6 +148,11 @@ func TestSDKUpdateFunctionCodePublishVersionIsPending(t *testing.T) {
 		t.Errorf("StateReason = %q, want The function is being created.", aws.ToString(upd.StateReason))
 	}
 
+	if upd.LastUpdateStatusReason != nil || upd.LastUpdateStatusReasonCode != "" {
+		t.Errorf("version LastUpdateStatusReason = %q/%q, want none",
+			aws.ToString(upd.LastUpdateStatusReason), upd.LastUpdateStatusReasonCode)
+	}
+
 	if got := getVersionSnapshot(t, c, "pubupd", "1"); got != pending {
 		t.Fatalf("version 1 while the update is InProgress = %+v, want %+v", got, pending)
 	}
@@ -169,5 +174,56 @@ func TestSDKUpdateFunctionCodePublishVersionIsPending(t *testing.T) {
 	}
 	if got := getVersionSnapshot(t, c, "pubupd", "1"); got != active {
 		t.Errorf("version 1 once the update completed = %+v, want %+v", got, active)
+	}
+}
+
+// TestSDKLatestInProgressReportsUpdateReason: while an update of $LATEST is
+// InProgress, real Lambda reports LastUpdateStatusReason "The function is being
+// created." and LastUpdateStatusReasonCode "Creating"; both are omitted once
+// the update is Successful.
+func TestSDKLatestInProgressReportsUpdateReason(t *testing.T) {
+	fc := config.NewFakeClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	c := newParityLambdaClient(t, config.WithClock(fc), config.WithAsyncSettle())
+	ctx := context.Background()
+
+	createParityFunction(t, c, "reason", []byte("v1"))
+	fc.Advance(2 * time.Second)
+
+	upd, err := c.UpdateFunctionCode(ctx, &awslambda.UpdateFunctionCodeInput{
+		FunctionName: aws.String("reason"), ZipFile: []byte("v2"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	get := func() *awslambda.GetFunctionConfigurationOutput {
+		t.Helper()
+
+		out, err := c.GetFunctionConfiguration(ctx, &awslambda.GetFunctionConfigurationInput{FunctionName: aws.String("reason")})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return out
+	}
+
+	inProgress := get()
+
+	for name, got := range map[string][2]string{
+		"UpdateFunctionCode":       {aws.ToString(upd.LastUpdateStatusReason), string(upd.LastUpdateStatusReasonCode)},
+		"GetFunctionConfiguration": {aws.ToString(inProgress.LastUpdateStatusReason), string(inProgress.LastUpdateStatusReasonCode)},
+	} {
+		if got != [2]string{"The function is being created.", "Creating"} {
+			t.Errorf("%s LastUpdateStatusReason/Code while InProgress = %q, want The function is being created./Creating", name, got)
+		}
+	}
+
+	fc.Advance(2 * time.Second)
+
+	done := get()
+	if done.LastUpdateStatus != lambdatypes.LastUpdateStatusSuccessful ||
+		done.LastUpdateStatusReason != nil || done.LastUpdateStatusReasonCode != "" {
+		t.Errorf("after the update = %q %q/%q, want Successful with no reason", done.LastUpdateStatus,
+			aws.ToString(done.LastUpdateStatusReason), done.LastUpdateStatusReasonCode)
 	}
 }

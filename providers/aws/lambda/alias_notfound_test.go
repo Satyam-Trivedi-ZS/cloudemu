@@ -58,7 +58,14 @@ func TestAliasAndVersionNotFoundParity(t *testing.T) {
 		t.Errorf("DeleteVersion(missing function) err = %v, want NotFound", err)
 	}
 
-	if err := m.DeleteVersion(ctx, "my-func", "not-an-alias"); !cerrors.IsNotFound(err) {
-		t.Errorf("DeleteVersion(unknown non-numeric qualifier) err = %v, want NotFound (unchanged)", err)
+	err = m.DeleteVersion(ctx, "my-func", "not-an-alias")
+	if !cerrors.IsNotFound(err) {
+		t.Fatalf("DeleteVersion(unknown non-numeric qualifier) err = %v, want NotFound", err)
+	}
+
+	// Worded like the other not-found errors: the qualified function ARN.
+	if got, want := cerrors.Message(err),
+		"Function not found: arn:aws:lambda:us-east-1:123456789012:function:my-func:not-an-alias"; got != want {
+		t.Errorf("DeleteVersion(unknown non-numeric qualifier) message = %q, want %q", got, want)
 	}
 }

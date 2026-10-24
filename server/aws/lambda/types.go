@@ -68,6 +68,13 @@ type functionConfiguration struct {
 	VpcConfig        *vpcConfigEnvelope        `json:"VpcConfig,omitempty"`
 	DeadLetterConfig *deadLetterConfigEnvelope `json:"DeadLetterConfig,omitempty"`
 	TracingConfig    *tracingConfigEnvelope    `json:"TracingConfig,omitempty"`
+
+	// LastUpdateStatusReason / LastUpdateStatusReasonCode explain an InProgress
+	// update ("The function is being created." / "Creating"); omitted once it
+	// is Successful.
+	LastUpdateStatusReason     string `json:"LastUpdateStatusReason,omitempty"`
+	LastUpdateStatusReasonCode string `json:"LastUpdateStatusReasonCode,omitempty"`
+
 	// Architectures echoes the function's instruction set (["x86_64"] or
 	// ["arm64"]); EphemeralStorage its /tmp size; Layers the imported layer
 	// versions. All default when the function was created without them.

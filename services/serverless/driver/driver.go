@@ -362,6 +362,12 @@ type FunctionInfo struct {
 	// Successful when creation completes). A backend that does not model the
 	// update lifecycle leaves it empty.
 	LastUpdateStatus string
+	// LastUpdateStatusReason / LastUpdateStatusReasonCode explain a
+	// LastUpdateStatus that is not Successful (AWS Lambda reports "The function
+	// is being created." / "Creating" while an update is InProgress). Empty
+	// otherwise.
+	LastUpdateStatusReason     string
+	LastUpdateStatusReasonCode string
 }
 
 // InvokeInput configures a function invocation.

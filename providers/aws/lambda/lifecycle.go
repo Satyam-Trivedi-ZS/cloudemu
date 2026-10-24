@@ -86,8 +86,14 @@ func (m *Mock) isUpdating(name string) bool {
 // observe overlays the function's lifecycle onto info: State Pending with the
 // Creating reason (and no LastUpdateStatus, which AWS first sets once creation
 // completes) while creation settles; otherwise the stored State with
-// LastUpdateStatus InProgress while an update settles, else Successful.
+// LastUpdateStatus InProgress while an update settles, else Successful. While
+// an update is InProgress, real Lambda gives LastUpdateStatusReason "The
+// function is being created." and LastUpdateStatusReasonCode "Creating", the
+// same text as a Pending function's StateReason.
 func (m *Mock) observe(info *driver.FunctionInfo) {
+	info.LastUpdateStatusReason = ""
+	info.LastUpdateStatusReasonCode = ""
+
 	if m.isPending(info.Name) {
 		info.State = statePending
 		info.StateReason = stateReasonCreating
@@ -100,6 +106,11 @@ func (m *Mock) observe(info *driver.FunctionInfo) {
 	info.StateReason = ""
 	info.StateReasonCode = ""
 	info.LastUpdateStatus = m.updateSettle.State(info.Name, m.opts.Clock.Now(), lastUpdateSuccessful)
+
+	if info.LastUpdateStatus == lastUpdateInProgress {
+		info.LastUpdateStatusReason = stateReasonCreating
+		info.LastUpdateStatusReasonCode = stateReasonCodeCreating
+	}
 }
 
 // errPending is the ResourceConflictException real Lambda returns for an
@@ -244,6 +255,17 @@ func retireEngineKey(retired []string, key, live string) []string {
 	}
 
 	return append(slices.Clone(retired), key)
+}
+
+// retiredWithPrior is fd.retired with the prior revision's engine key added,
+// for a snapshot: the prior revision is not persisted, so after a restore its
+// deployment no longer serves anything and must be removed like a retired one.
+func (fd *funcData) retiredWithPrior() []string {
+	if fd.prior == nil {
+		return fd.retired
+	}
+
+	return retireEngineKey(fd.retired, fd.prior.engineKey(fd.info.Name), fd.engineKey())
 }
 
 // engineKeys lists every engine key fd holds a deployment under: the live one,

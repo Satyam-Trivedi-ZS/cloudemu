@@ -1696,6 +1696,9 @@ func applyVersionLifecycle(cfg *functionConfiguration, ver *sdrv.FunctionVersion
 	cfg.StateReason = ver.StateReason
 	cfg.StateReasonCode = ver.StateReasonCode
 	cfg.LastUpdateStatus = ver.LastUpdateStatus
+	// The $LATEST update reason never applies to a published version.
+	cfg.LastUpdateStatusReason = ""
+	cfg.LastUpdateStatusReasonCode = ""
 
 	if cfg.State == "" {
 		cfg.State = stateActive
@@ -1728,6 +1731,9 @@ func toConfiguration(info *sdrv.FunctionInfo, awsCfg *sdrv.AWSFunctionConfig) fu
 		CodeSize:         info.CodeSize,
 		Version:          version,
 		RevisionID:       info.RevisionID,
+
+		LastUpdateStatusReason:     info.LastUpdateStatusReason,
+		LastUpdateStatusReasonCode: info.LastUpdateStatusReasonCode,
 	}
 
 	if len(info.Environment) > 0 {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 
 	"github.com/stackshy/cloudemu/v2/internal/memstore"
@@ -48,6 +49,13 @@ type funcSnapshot struct {
 	Aliases     map[string]driver.Alias                          `json:"aliases,omitempty"`
 	Concurrency *driver.ConcurrencyConfig                        `json:"concurrency,omitempty"`
 	Policies    map[string]map[string]driver.PermissionStatement `json:"policies,omitempty"`
+
+	// RetiredEngineNames are engine keys the function still holds a deployment
+	// under but no longer serves (see funcData.retired). The prior revision's
+	// key is folded in, since the prior revision itself is not persisted. They
+	// are removed at the next code update or on delete.
+	RetiredEngineNames []string `json:"retiredEngineNames,omitempty"`
+
 	// URLConfigs is the Function URL config per qualifier (see funcData.urlConfigs).
 	URLConfigs map[string]*driver.FunctionURLConfig `json:"urlConfigs,omitempty"`
 	// URLConfig is the legacy single-URL shape a snapshot taken before Function
@@ -186,6 +194,7 @@ func snapshotFunc(fd *funcData) *funcSnapshot {
 		AWSConfig: fd.awsConfig, EventInvokeConfigs: fd.eventInvokeConfigs,
 		ProvisionedConcurrencyConfigs: fd.provisionedConcurrencyConfigs,
 		CodeSigningConfigARN:          fd.codeSigningConfigARN,
+		RetiredEngineNames:            fd.retiredWithPrior(),
 	}
 
 	for _, v := range fd.versions {
@@ -287,6 +296,7 @@ func restoreLayerData(ls *layerSnapshot) (*layerData, error) {
 func (m *Mock) restoreFunc(name string, fs *funcSnapshot) funcData {
 	fd := funcData{
 		info: fs.Info, engineBacked: fs.EngineBacked, engineName: fs.EngineName, nextVersion: fs.NextVersion,
+		retired: slices.Clone(fs.RetiredEngineNames),
 		aliases: memstore.New[*aliasData](), concurrency: fs.Concurrency,
 		policies: fs.Policies, urlConfigs: legacyURLConfigs(fs), awsConfig: fs.AWSConfig,
 		eventInvokeConfigs:            fs.EventInvokeConfigs,

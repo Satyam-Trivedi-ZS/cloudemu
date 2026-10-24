@@ -262,13 +262,14 @@ func (m *Mock) DeleteVersion(ctx context.Context, name, qualifier string) error 
 	if !m.versionExists(&fd, qualifier) {
 		// Real Lambda treats deleting a numbered version the function does not
 		// have as a no-op success: version-scoped DeleteFunction is idempotent
-		// while the function exists. Any other unknown qualifier keeps the
-		// emulator's not-found error (real behavior for it is unverified).
+		// while the function exists. Any other unknown qualifier stays
+		// ResourceNotFoundException (real behavior for it is unverified), worded
+		// like the emulator's other not-found errors: the qualified function ARN.
 		if isVersionQualifier(qualifier) {
 			return nil
 		}
 
-		return cerrors.Newf(cerrors.NotFound, "function version %s not found", qualifier)
+		return m.errFunctionNotFound(ctx, name, qualifier)
 	}
 
 	if alias := aliasReferencing(&fd, qualifier); alias != "" {

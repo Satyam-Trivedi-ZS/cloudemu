@@ -335,3 +335,103 @@ func TestVersionPublishedWithUpdateIsPendingUntilUpdateCompletes(t *testing.T) {
 
 	assertVersionActive("during a later $LATEST update")
 }
+
+// TestRetiredDeploymentsAreRemovedAfterRestore: the prior revision is not
+// persisted, so a snapshot records its deployment as retired; after a restore
+// the next code update removes it, and DeleteFunction removes every deployment.
+func TestRetiredDeploymentsAreRemovedAfterRestore(t *testing.T) {
+	ctx := context.Background()
+	eng := newCodeEngine()
+	m, fc := newEngineSettleMock(eng, true)
+
+	cfg := engineFuncConfig()
+	cfg.Code = []byte("v1")
+
+	if _, err := m.CreateFunction(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	fc.Advance(2 * time.Second)
+
+	if _, err := m.UpdateFunction(ctx, "real-fn", driver.FunctionConfig{Code: []byte("v2")}); err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := m.Snapshot(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	restored, rfc := newEngineSettleMock(eng, true)
+	if err := restored.Restore(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+
+	rfc.Advance(2 * time.Second)
+
+	if _, err := restored.UpdateFunction(ctx, "real-fn", driver.FunctionConfig{Code: []byte("v3")}); err != nil {
+		t.Fatal(err)
+	}
+
+	// v1's deployment ("real-fn") was the prior revision when the snapshot was
+	// taken; only v2's (now the prior) and v3's remain.
+	if keys := eng.keys(); len(keys) != 2 || slices.Contains(keys, "real-fn") {
+		t.Errorf("engine deployments after the update = %v, want only v2's and v3's", keys)
+	}
+
+	if err := restored.DeleteFunction(ctx, "real-fn"); err != nil {
+		t.Fatal(err)
+	}
+
+	if keys := eng.keys(); len(keys) != 0 {
+		t.Errorf("engine deployments after delete = %v, want none", keys)
+	}
+}
+
+// TestLatestInProgressReportsUpdateReason: while an update is InProgress,
+// $LATEST reports LastUpdateStatusReason "The function is being created." and
+// LastUpdateStatusReasonCode "Creating", as real Lambda does; both clear once
+// the update is Successful.
+func TestLatestInProgressReportsUpdateReason(t *testing.T) {
+	ctx := context.Background()
+	m, fc := newSettleMock()
+
+	if _, err := m.CreateFunction(ctx, defaultFuncConfig()); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := m.GetFunction(ctx, "my-func")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if created.LastUpdateStatusReason != "" || created.LastUpdateStatusReasonCode != "" {
+		t.Errorf("Pending function reports update reason %q/%q, want none",
+			created.LastUpdateStatusReason, created.LastUpdateStatusReasonCode)
+	}
+
+	fc.Advance(2 * time.Second)
+
+	upd, err := m.UpdateFunction(ctx, "my-func", driver.FunctionConfig{Description: "d2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if upd.LastUpdateStatusReason != stateReasonCreating || upd.LastUpdateStatusReasonCode != stateReasonCodeCreating {
+		t.Errorf("InProgress update reason = %q/%q, want %q/%q", upd.LastUpdateStatusReason,
+			upd.LastUpdateStatusReasonCode, stateReasonCreating, stateReasonCodeCreating)
+	}
+
+	fc.Advance(2 * time.Second)
+
+	done, err := m.GetFunction(ctx, "my-func")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if done.LastUpdateStatus != lastUpdateSuccessful || done.LastUpdateStatusReason != "" ||
+		done.LastUpdateStatusReasonCode != "" {
+		t.Errorf("after the update = %q %q/%q, want Successful with no reason", done.LastUpdateStatus,
+			done.LastUpdateStatusReason, done.LastUpdateStatusReasonCode)
+	}
+}
