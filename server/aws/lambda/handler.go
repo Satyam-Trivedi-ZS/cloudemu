@@ -293,9 +293,16 @@ func (*Handler) Matches(r *http.Request) bool {
 		strings.HasPrefix(r.URL.Path, layersPrefix) ||
 		strings.HasPrefix(r.URL.Path, functionURLPrefix) ||
 		strings.HasPrefix(r.URL.Path, eventInvokeConfigPrefix) ||
-		strings.HasPrefix(r.URL.Path, codeSigningConfigsPrefix) ||
-		r.URL.Path == accountSettingsPath ||
-		isCodeSigningPath(r.URL.Path)
+		isCodeSigningOrAccountPath(r.URL.Path)
+}
+
+// isCodeSigningOrAccountPath reports whether path is under the code signing
+// config API, a function's code-signing-config sub-resource, or the account
+// settings API.
+func isCodeSigningOrAccountPath(path string) bool {
+	return strings.HasPrefix(path, codeSigningConfigsPrefix) ||
+		path == accountSettingsPath ||
+		isCodeSigningPath(path)
 }
 
 // ServeHTTP runs the operation classify picks for the request.
@@ -310,17 +317,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case routeFunctionURLInvoke:
 		h.serveFunctionURLInvoke(w, r)
 	case routeTags:
-		if foreignRef(&a, h.accountID, h.region) {
-			writeForeignRef(w, a.item)
-			return
-		}
-
-		if isCodeSigningConfigARN(a.item) {
-			h.serveCodeSigningConfigTags(w, r, op, a.item)
-			return
-		}
-
-		h.serveTags(w, r, op, a.name)
+		h.serveTagsRoute(w, r, op, &a)
 	case routeEventSourceMappings:
 		h.serveEventSourceMappings(w, r, op, a.item)
 	case routeLayers:
@@ -329,19 +326,58 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveFunctionURL(w, r, op, &a)
 	case routeEventInvokeConfig:
 		h.serveEventInvokeConfig(w, r, op, &a)
-	case routeProvisionedConcurrency:
-		h.serveProvisionedConcurrency(w, r, op, &a)
-	case routeCodeSigning:
-		h.serveFunctionCodeSigningConfig(w, r, op, a.name)
-	case routeCodeSigningConfigs:
-		h.serveCodeSigningConfigs(w, r, op, &a)
-	case routeAccountSettings:
-		h.serveAccountSettings(w, r)
-	case routeConcurrency:
-		h.serveConcurrency(w, r, op, a.name)
+	case routeProvisionedConcurrency, routeConcurrency:
+		h.serveConcurrencyRoute(w, r, op, &a)
+	case routeCodeSigning, routeCodeSigningConfigs, routeAccountSettings:
+		h.serveCodeSigningOrAccount(w, r, op, &a)
 	case routeFunctions:
 		h.serveFunctions(w, r, op, &a)
 	}
+}
+
+// serveTagsRoute serves /2017-03-31/tags/{arn}: a function's tags, or a code
+// signing config's when the ARN names one. A cross-account or cross-region ARN
+// is rejected first.
+func (h *Handler) serveTagsRoute(w http.ResponseWriter, r *http.Request, op opID, a *opArgs) {
+	if foreignRef(a, h.accountID, h.region) {
+		writeForeignRef(w, a.item)
+		return
+	}
+
+	if isCodeSigningConfigARN(a.item) {
+		h.serveCodeSigningConfigTags(w, r, op, a.item)
+		return
+	}
+
+	h.serveTags(w, r, op, a.name)
+}
+
+// serveCodeSigningOrAccount serves the code signing config API
+// (routeCodeSigningConfigs), a function's code-signing-config sub-resource
+// (routeCodeSigning) and the account settings API (routeAccountSettings).
+func (h *Handler) serveCodeSigningOrAccount(w http.ResponseWriter, r *http.Request, op opID, a *opArgs) {
+	if a.route == routeAccountSettings {
+		h.serveAccountSettings(w, r)
+		return
+	}
+
+	if a.route == routeCodeSigning {
+		h.serveFunctionCodeSigningConfig(w, r, op, a.name)
+		return
+	}
+
+	h.serveCodeSigningConfigs(w, r, op, a)
+}
+
+// serveConcurrencyRoute serves a function's provisioned concurrency
+// (routeProvisionedConcurrency) or reserved concurrency (routeConcurrency).
+func (h *Handler) serveConcurrencyRoute(w http.ResponseWriter, r *http.Request, op opID, a *opArgs) {
+	if a.route == routeProvisionedConcurrency {
+		h.serveProvisionedConcurrency(w, r, op, a)
+		return
+	}
+
+	h.serveConcurrency(w, r, op, a.name)
 }
 
 // serveFunctions serves the /2015-03-31/functions tree.
@@ -439,7 +475,7 @@ func (h *Handler) serveTags(w http.ResponseWriter, r *http.Request, op opID, nam
 			return
 		}
 
-		writeJSON(w, http.StatusOK, map[string]any{"Tags": tags})
+		writeJSON(w, http.StatusOK, map[string]any{bodyTags: tags})
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "InvalidRequestException", "method not allowed")
 	}
@@ -1026,51 +1062,15 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !checkModelConstraints(w, req.Role, req.Environment) {
+	if !h.validateCreate(w, r, &req) {
 		return
 	}
 
-	if err := h.checkCreateRequest(&req); err != nil {
-		writeErr(w, err)
-		return
-	}
-
-	if err := h.validateLayers(r.Context(), req.Layers); err != nil {
-		writeErr(w, err)
-		return
-	}
-
-	if !h.checkCodeSigningConfigExists(w, r, req.CodeSigningConfigArn) {
-		return
-	}
-
-	cfg := sdrv.FunctionConfig{
-		Name:        req.FunctionName,
-		Runtime:     req.Runtime,
-		Handler:     req.Handler,
-		Role:        req.Role,
-		Description: req.Description,
-		Memory:      req.MemorySize,
-		Timeout:     req.Timeout,
-		Tags:        req.Tags,
-	}
-	if req.Environment != nil {
-		cfg.Environment = req.Environment.Variables
-	}
-
-	code, err := h.resolveCode(r.Context(), req.Code)
+	cfg, err := h.createFunctionConfig(r.Context(), &req)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-
-	code, err = h.overlayLayers(code, req.Layers)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-
-	cfg.Code = code
 
 	info, err := h.fn.CreateFunction(r.Context(), cfg)
 	if err != nil {
@@ -1100,6 +1100,59 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, toConfiguration(info, awsCfg))
+}
+
+// validateCreate runs the CreateFunction checks that precede any state change:
+// model constraints, the request itself, its layers and its code signing
+// config. It writes the error and returns false on the first failure.
+func (h *Handler) validateCreate(w http.ResponseWriter, r *http.Request, req *createFunctionRequest) bool {
+	if !checkModelConstraints(w, req.Role, req.Environment) {
+		return false
+	}
+
+	if err := h.checkCreateRequest(req); err != nil {
+		writeErr(w, err)
+		return false
+	}
+
+	if err := h.validateLayers(r.Context(), req.Layers); err != nil {
+		writeErr(w, err)
+		return false
+	}
+
+	return h.checkCodeSigningConfigExists(w, r, req.CodeSigningConfigArn)
+}
+
+// createFunctionConfig builds the portable FunctionConfig a CreateFunction
+// request creates, with its code resolved and its layers overlaid.
+func (h *Handler) createFunctionConfig(ctx context.Context, req *createFunctionRequest) (sdrv.FunctionConfig, error) {
+	cfg := sdrv.FunctionConfig{
+		Name:        req.FunctionName,
+		Runtime:     req.Runtime,
+		Handler:     req.Handler,
+		Role:        req.Role,
+		Description: req.Description,
+		Memory:      req.MemorySize,
+		Timeout:     req.Timeout,
+		Tags:        req.Tags,
+	}
+	if req.Environment != nil {
+		cfg.Environment = req.Environment.Variables
+	}
+
+	code, err := h.resolveCode(ctx, req.Code)
+	if err != nil {
+		return sdrv.FunctionConfig{}, err
+	}
+
+	code, err = h.overlayLayers(code, req.Layers)
+	if err != nil {
+		return sdrv.FunctionConfig{}, err
+	}
+
+	cfg.Code = code
+
+	return cfg, nil
 }
 
 // attachCreateCodeSigningConfig attaches the CodeSigningConfigArn of a
@@ -1507,17 +1560,7 @@ func (h *Handler) invoke(w http.ResponseWriter, r *http.Request, name string) {
 	// alias/version fails with ResourceNotFoundException rather than a spurious
 	// 204.
 	if invokeType == invocationTypeDryRun {
-		if _, err = h.fn.Invoke(r.Context(), sdrv.InvokeInput{
-			FunctionName: functionName,
-			InvokeType:   invocationTypeDryRun,
-			Qualifier:    qualifier,
-		}); err != nil {
-			writeErr(w, err)
-			return
-		}
-
-		w.WriteHeader(http.StatusNoContent)
-
+		h.invokeDryRun(w, r, functionName, qualifier)
 		return
 	}
 
@@ -1539,6 +1582,28 @@ func (h *Handler) invoke(w http.ResponseWriter, r *http.Request, name string) {
 		return
 	}
 
+	writeInvokeResult(w, r, out)
+}
+
+// invokeDryRun serves a DryRun invocation: it checks that the function and
+// qualifier exist without running anything and answers 204 No Content.
+func (h *Handler) invokeDryRun(w http.ResponseWriter, r *http.Request, functionName, qualifier string) {
+	if _, err := h.fn.Invoke(r.Context(), sdrv.InvokeInput{
+		FunctionName: functionName,
+		InvokeType:   invocationTypeDryRun,
+		Qualifier:    qualifier,
+	}); err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeInvokeResult writes the response of a synchronous (RequestResponse)
+// invocation: the executed version and log tail headers, then the payload, or
+// the handler error with X-Amz-Function-Error.
+func writeInvokeResult(w http.ResponseWriter, r *http.Request, out *sdrv.InvokeOutput) {
 	w.Header().Set("Content-Type", contentTypeJSON)
 
 	// A synchronous (RequestResponse) invocation always reports the version that

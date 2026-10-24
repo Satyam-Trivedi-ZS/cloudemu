@@ -22,6 +22,20 @@ const (
 // CreateFunction return for an unknown code signing config ARN (HTTP 404).
 const codeSigningConfigNotFound = "CodeSigningConfigNotFoundException"
 
+// Response body field names shared by more than one Lambda operation.
+const (
+	// bodyTags is the tag map of a ListTags response.
+	bodyTags = "Tags"
+	// bodyCodeSigningConfig wraps a code signing config in a response.
+	bodyCodeSigningConfig = "CodeSigningConfig"
+	// bodyCodeSigningConfigArn is the config ARN of a function's code signing
+	// config response.
+	bodyCodeSigningConfigArn = "CodeSigningConfigArn"
+	// bodyFunctionName is the function name of a function's code signing
+	// config response.
+	bodyFunctionName = "FunctionName"
+)
+
 // codeSigningManager is the AWS-only code signing surface (code signing
 // configs and their association with functions). It has no Azure Functions or
 // GCP Cloud Functions equivalent, so the handler type-asserts for it rather than
@@ -139,7 +153,7 @@ func (h *Handler) serveFunctionCodeSigningConfig(w http.ResponseWriter, r *http.
 			arn = got
 		}
 
-		writeJSON(w, http.StatusOK, map[string]any{"FunctionName": name, "CodeSigningConfigArn": arn})
+		writeJSON(w, http.StatusOK, map[string]any{bodyFunctionName: name, bodyCodeSigningConfigArn: arn})
 	case opPutFunctionCodeSigningConfig:
 		h.putFunctionCodeSigningConfig(w, r, csm, ok, name)
 	case opDeleteFunctionCodeSigningConfig:
@@ -189,7 +203,7 @@ func (h *Handler) putFunctionCodeSigningConfig(
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{
-		"FunctionName": name, "CodeSigningConfigArn": req.CodeSigningConfigArn,
+		bodyFunctionName: name, bodyCodeSigningConfigArn: req.CodeSigningConfigArn,
 	})
 }
 
@@ -240,7 +254,7 @@ func (h *Handler) serveCodeSigningConfigs(w http.ResponseWriter, r *http.Request
 			return
 		}
 
-		writeJSON(w, http.StatusOK, map[string]any{"CodeSigningConfig": toCodeSigningConfigEnvelope(c)})
+		writeJSON(w, http.StatusOK, map[string]any{bodyCodeSigningConfig: toCodeSigningConfigEnvelope(c)})
 	case opUpdateCodeSigningConfig:
 		h.updateCodeSigningConfig(w, r, csm, a.item)
 	case opDeleteCodeSigningConfig:
@@ -325,7 +339,7 @@ func (*Handler) createCodeSigningConfig(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]any{"CodeSigningConfig": toCodeSigningConfigEnvelope(c)})
+	writeJSON(w, http.StatusCreated, map[string]any{bodyCodeSigningConfig: toCodeSigningConfigEnvelope(c)})
 }
 
 // updateCodeSigningConfig serves UpdateCodeSigningConfig.
@@ -354,7 +368,7 @@ func (*Handler) updateCodeSigningConfig(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"CodeSigningConfig": toCodeSigningConfigEnvelope(c)})
+	writeJSON(w, http.StatusOK, map[string]any{bodyCodeSigningConfig: toCodeSigningConfigEnvelope(c)})
 }
 
 // codeSigningConfigARNMarker identifies a code signing config ARN
@@ -418,7 +432,7 @@ func (h *Handler) serveCodeSigningConfigTags(w http.ResponseWriter, r *http.Requ
 			tags = map[string]string{}
 		}
 
-		writeJSON(w, http.StatusOK, map[string]any{"Tags": tags})
+		writeJSON(w, http.StatusOK, map[string]any{bodyTags: tags})
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "InvalidRequestException", "method not allowed")
 	}
