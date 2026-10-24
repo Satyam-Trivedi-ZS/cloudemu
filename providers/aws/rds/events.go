@@ -24,16 +24,16 @@ func errEventSubscriptionNotFound(name string) error {
 //
 //nolint:gochecknoglobals // static lookup table
 var eventCategoryCatalog = map[string][]string{
-	"db-instance": {
-		"availability", "backup", "configuration change", "creation", "deletion",
-		"failover", "failure", "maintenance", "notification", "recovery", "restoration",
+	sourceDBInstance: {
+		catAvailability, catBackup, catConfigurationChange, catCreation, catDeletion,
+		catFailover, catFailure, catMaintenance, catNotification, catRecovery, catRestoration,
 	},
-	"db-cluster":          {"configuration change", "creation", "deletion", "failover", "failure", "maintenance", "notification"},
-	"db-snapshot":         {"creation", "deletion", "notification", "restoration"},
-	"db-cluster-snapshot": {"backup", "notification"},
-	"db-parameter-group":  {"configuration change"},
-	"db-security-group":   {"configuration change", "failure"},
-	"db-proxy":            {"configuration change", "creation", "deletion"},
+	sourceDBCluster:         {catConfigurationChange, catCreation, catDeletion, catFailover, catFailure, catMaintenance, catNotification},
+	sourceDBSnapshot:        {catCreation, catDeletion, catNotification, catRestoration},
+	sourceDBClusterSnapshot: {catBackup, catNotification},
+	sourceDBParameterGroup:  {catConfigurationChange},
+	sourceDBSecurityGroup:   {catConfigurationChange, catFailure},
+	sourceDBProxy:           {catConfigurationChange, catCreation, catDeletion},
 }
 
 //nolint:gocritic // cfg matches the driver interface signature.
@@ -193,6 +193,6 @@ func (*Mock) DescribeEventCategories(_ context.Context, sourceType string) ([]rd
 //
 //nolint:gochecknoglobals // static lookup table
 var eventCategorySourceTypes = []string{
-	"db-instance", "db-cluster", "db-snapshot", "db-cluster-snapshot",
-	"db-parameter-group", "db-security-group", "db-proxy",
+	sourceDBInstance, sourceDBCluster, sourceDBSnapshot, sourceDBClusterSnapshot,
+	sourceDBParameterGroup, sourceDBSecurityGroup, sourceDBProxy,
 }

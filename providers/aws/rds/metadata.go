@@ -34,13 +34,13 @@ const (
 //
 //nolint:gochecknoglobals // static lookup table
 var engineVersionCatalog = map[string][]string{
-	"mysql":             {"8.0.35", "8.0.36"},
-	"postgres":          {"15.4", "16.2"},
-	"mariadb":           {"10.11.6"},
-	"aurora-mysql":      {"8.0.mysql_aurora.3.05.2"},
-	"aurora-postgresql": {"15.4", "16.1"},
-	"docdb":             {"5.0.0"},
-	"neptune":           {"1.3.1.0"},
+	engineMySQL:            {"8.0.35", "8.0.36"},
+	enginePostgres:         {"15.4", "16.2"},
+	engineMariaDB:          {"10.11.6"},
+	engineAuroraMySQL:      {"8.0.mysql_aurora.3.05.2"},
+	engineAuroraPostgreSQL: {"15.4", "16.1"},
+	engineDocDB:            {"5.0.0"},
+	engineNeptune:          {"1.3.1.0"},
 }
 
 // Engine names whose parameter-group family is derived from the engine version.
@@ -275,7 +275,7 @@ func (*Mock) DescribeOrderableDBInstanceOptions(
 //
 //nolint:gochecknoglobals // static lookup table
 var engineCatalogOrder = []string{
-	"mysql", "postgres", "mariadb", "aurora-mysql", "aurora-postgresql", "docdb", "neptune",
+	engineMySQL, enginePostgres, engineMariaDB, engineAuroraMySQL, engineAuroraPostgreSQL, engineDocDB, engineNeptune,
 }
 
 // ---- tagging ----

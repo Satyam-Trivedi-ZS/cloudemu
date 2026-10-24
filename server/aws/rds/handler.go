@@ -491,6 +491,10 @@ var invalidStateFaults = []faultMapping{
 	{"DB instance", "InvalidDBInstanceState"},
 }
 
+// codeInvalidParameterCombination is the RDS fault for parameters that are
+// individually valid but cannot be used together.
+const codeInvalidParameterCombination = "InvalidParameterCombination"
+
 // invalidArgumentFaults maps an invalid-argument error to the AWS-shaped fault
 // code. A rule that one parameter requires another ("X is supplied, Y must
 // also be provided"), or a parameter group whose family does not fit the
@@ -499,10 +503,10 @@ var invalidStateFaults = []faultMapping{
 //
 //nolint:gochecknoglobals // ordered static lookup table
 var invalidArgumentFaults = []faultMapping{
-	{"must also be provided", "InvalidParameterCombination"},
-	{"can't be used for this instance", "InvalidParameterCombination"},
-	{"You must explicitly specify a new DB instance parameter group", "InvalidParameterCombination"},
-	{"valid in combination with AllowMajorVersionUpgrade", "InvalidParameterCombination"},
+	{"must also be provided", codeInvalidParameterCombination},
+	{"can't be used for this instance", codeInvalidParameterCombination},
+	{"You must explicitly specify a new DB instance parameter group", codeInvalidParameterCombination},
+	{"valid in combination with AllowMajorVersionUpgrade", codeInvalidParameterCombination},
 }
 
 // invalidArgumentCode picks the AWS-shaped invalid-argument fault from the

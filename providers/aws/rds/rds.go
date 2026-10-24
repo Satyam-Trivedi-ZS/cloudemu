@@ -213,7 +213,7 @@ func (m *Mock) emitInstanceMetrics(instanceID, engine string, cpu, connections f
 
 func defaultPortFor(engine string) int {
 	switch engine {
-	case "postgres", "aurora-postgresql":
+	case enginePostgres, engineAuroraPostgreSQL:
 		return defaultPortPostgres
 	case engineNeptune:
 		return defaultPortNeptune

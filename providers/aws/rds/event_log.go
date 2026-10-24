@@ -21,6 +21,22 @@ const (
 	sourceDBClusterSnapshot = "db-cluster-snapshot"
 	sourceDBParameterGroup  = "db-parameter-group"
 	sourceDBProxy           = "db-proxy"
+	sourceDBSecurityGroup   = "db-security-group"
+)
+
+// RDS event categories ("Amazon RDS event categories and event messages").
+const (
+	catAvailability        = "availability"
+	catBackup              = "backup"
+	catConfigurationChange = "configuration change"
+	catCreation            = "creation"
+	catDeletion            = "deletion"
+	catFailover            = "failover"
+	catFailure             = "failure"
+	catMaintenance         = "maintenance"
+	catNotification        = "notification"
+	catRecovery            = "recovery"
+	catRestoration         = "restoration"
 )
 
 // Event-log bounds. Real RDS returns events for the past 14 days and, absent a
@@ -57,31 +73,31 @@ type eventSpec struct {
 //
 //nolint:gochecknoglobals // static event catalog
 var (
-	evInstanceDeleted   = eventSpec{"RDS-EVENT-0003", "deletion", "DB instance deleted"}
-	evInstanceCreated   = eventSpec{"RDS-EVENT-0005", "creation", "DB instance created"}
-	evInstanceRestarted = eventSpec{"RDS-EVENT-0006", "availability", "DB instance restarted"}
-	evInstancePITR      = eventSpec{"RDS-EVENT-0019", "restoration", "Restored from DB instance %s to %s"}
-	evInstanceStopped   = eventSpec{"RDS-EVENT-0087", "notification", "DB instance stopped"}
-	evInstanceStarted   = eventSpec{"RDS-EVENT-0088", "notification", "DB instance started"}
+	evInstanceDeleted   = eventSpec{"RDS-EVENT-0003", catDeletion, "DB instance deleted"}
+	evInstanceCreated   = eventSpec{"RDS-EVENT-0005", catCreation, "DB instance created"}
+	evInstanceRestarted = eventSpec{"RDS-EVENT-0006", catAvailability, "DB instance restarted"}
+	evInstancePITR      = eventSpec{"RDS-EVENT-0019", catRestoration, "Restored from DB instance %s to %s"}
+	evInstanceStopped   = eventSpec{"RDS-EVENT-0087", catNotification, "DB instance stopped"}
+	evInstanceStarted   = eventSpec{"RDS-EVENT-0088", catNotification, "DB instance started"}
 
-	evParameterUpdated = eventSpec{"RDS-EVENT-0037", "configuration change", "Updated parameter %s to %s with apply method %s"}
+	evParameterUpdated = eventSpec{"RDS-EVENT-0037", catConfigurationChange, "Updated parameter %s to %s with apply method %s"}
 
-	evSnapshotCreating = eventSpec{"RDS-EVENT-0040", "creation", "Creating manual snapshot"}
-	evSnapshotDeleted  = eventSpec{"RDS-EVENT-0041", "deletion", "Deleted user snapshot"}
-	evSnapshotCreated  = eventSpec{"RDS-EVENT-0042", "creation", "Manual snapshot created"}
+	evSnapshotCreating = eventSpec{"RDS-EVENT-0040", catCreation, "Creating manual snapshot"}
+	evSnapshotDeleted  = eventSpec{"RDS-EVENT-0041", catDeletion, "Deleted user snapshot"}
+	evSnapshotCreated  = eventSpec{"RDS-EVENT-0042", catCreation, "Manual snapshot created"}
 
-	evClusterFailover = eventSpec{"RDS-EVENT-0071", "failover", "Completed failover to DB instance: %s"}
-	evClusterStopped  = eventSpec{"RDS-EVENT-0150", "notification", "DB cluster stopped"}
-	evClusterStarted  = eventSpec{"RDS-EVENT-0151", "notification", "DB cluster started"}
-	evClusterCreated  = eventSpec{"RDS-EVENT-0170", "creation", "DB cluster created"}
-	evClusterDeleted  = eventSpec{"RDS-EVENT-0171", "deletion", "DB cluster deleted"}
+	evClusterFailover = eventSpec{"RDS-EVENT-0071", catFailover, "Completed failover to DB instance: %s"}
+	evClusterStopped  = eventSpec{"RDS-EVENT-0150", catNotification, "DB cluster stopped"}
+	evClusterStarted  = eventSpec{"RDS-EVENT-0151", catNotification, "DB cluster started"}
+	evClusterCreated  = eventSpec{"RDS-EVENT-0170", catCreation, "DB cluster created"}
+	evClusterDeleted  = eventSpec{"RDS-EVENT-0171", catDeletion, "DB cluster deleted"}
 
-	evClusterSnapshotCreating = eventSpec{"RDS-EVENT-0074", "backup", "Creating manual cluster snapshot"}
-	evClusterSnapshotCreated  = eventSpec{"RDS-EVENT-0075", "backup", "Manual cluster snapshot created"}
+	evClusterSnapshotCreating = eventSpec{"RDS-EVENT-0074", catBackup, "Creating manual cluster snapshot"}
+	evClusterSnapshotCreated  = eventSpec{"RDS-EVENT-0075", catBackup, "Manual cluster snapshot created"}
 
-	evProxyCreated  = eventSpec{"RDS-EVENT-0203", "creation", "RDS created DB proxy %s"}
-	evProxyModified = eventSpec{"RDS-EVENT-0204", "configuration change", "RDS modified DB proxy %s"}
-	evProxyDeleted  = eventSpec{"RDS-EVENT-0205", "deletion", "RDS deleted DB proxy %s"}
+	evProxyCreated  = eventSpec{"RDS-EVENT-0203", catCreation, "RDS created DB proxy %s"}
+	evProxyModified = eventSpec{"RDS-EVENT-0204", catConfigurationChange, "RDS modified DB proxy %s"}
+	evProxyDeleted  = eventSpec{"RDS-EVENT-0205", catDeletion, "RDS deleted DB proxy %s"}
 )
 
 // SNSPublisher publishes a message to an SNS topic. The SNS mock satisfies it,
@@ -300,8 +316,8 @@ func (m *Mock) recordEvent(src eventSource, spec eventSpec, args ...any) {
 //
 //nolint:gochecknoglobals // static lookup table
 var eventSourceTypes = map[string]struct{}{
-	"db-instance": {}, "db-parameter-group": {}, "db-security-group": {}, "db-snapshot": {},
-	"db-cluster": {}, "db-cluster-snapshot": {}, "custom-engine-version": {}, "db-proxy": {},
+	sourceDBInstance: {}, sourceDBParameterGroup: {}, sourceDBSecurityGroup: {}, sourceDBSnapshot: {},
+	sourceDBCluster: {}, sourceDBClusterSnapshot: {}, "custom-engine-version": {}, sourceDBProxy: {},
 	"blue-green-deployment": {}, "db-shard-group": {}, "zero-etl": {},
 }
 
