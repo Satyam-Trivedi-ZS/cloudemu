@@ -329,6 +329,9 @@ type Mock struct {
 	// per function name. It backs reserved-concurrency enforcement on Invoke.
 	inflightMu sync.Mutex
 	inflight   map[string]int
+	// pins counts the invocations running on each engine deployment, so a code
+	// update removes a deployment it retired only once they have finished.
+	pins *deployPins
 }
 
 // SetMonitoring sets the monitoring backend for auto-metric generation.
@@ -380,6 +383,7 @@ func New(opts *config.Options) *Mock {
 		createSettle: settle.NewSet(),
 		updateSettle: settle.NewSet(),
 		cscs:         memstore.New[driver.CodeSigningConfig](),
+		pins:         newDeployPins(),
 	}
 }
 
@@ -520,7 +524,9 @@ func (m *Mock) commitUpdate(
 		return nil, err
 	}
 
-	m.keepPrior(&fd)
+	// The update's InProgress window opens now; the prior revision serves
+	// $LATEST invocations until it closes.
+	m.keepPrior(&fd, m.beginUpdateSettle(name))
 	fd.info = info
 
 	if deployed != nil {
@@ -531,7 +537,6 @@ func (m *Mock) commitUpdate(
 	}
 
 	m.funcs.Set(name, fd)
-	m.beginUpdateSettle(name)
 
 	result := info
 	m.observe(&result)
@@ -647,7 +652,7 @@ func (m *Mock) runInvocation(
 	h := m.resolveHandler(fd, input.FunctionName)
 
 	if h == nil && fd.engineBacked {
-		return m.invokeEngine(ctx, input, fd.engineKey(), dims, executedVersion, start)
+		return m.invokeEngine(ctx, input, fd, dims, executedVersion, start)
 	}
 
 	if h == nil {
@@ -865,13 +870,22 @@ func functionNameFromARN(arn string) string {
 }
 
 // invokeEngine runs a function whose code was deployed to the configured
-// FunctionEngine under engineKey and records the same metrics as a real handler invocation. A
-// handler that raised is reported via out.Error (HTTP stays 200), matching real
-// Lambda's X-Amz-Function-Error semantics.
+// FunctionEngine and records the same metrics as a real handler invocation. fd
+// is the invocation's copy of the function; the deployment it runs is pinned
+// for the call (see pinDeployment). A handler that raised is reported via
+// out.Error (HTTP stays 200), matching real Lambda's X-Amz-Function-Error
+// semantics.
 func (m *Mock) invokeEngine(
-	ctx context.Context, input driver.InvokeInput, engineKey string, dims map[string]string,
+	ctx context.Context, input driver.InvokeInput, fd *funcData, dims map[string]string,
 	executedVersion string, start time.Time,
 ) (*driver.InvokeOutput, error) {
+	engineKey, err := m.pinDeployment(ctx, fd, executedVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	defer m.pins.unpin(engineKey)
+
 	out, err := funcengine.Invoke(ctx, m.opts.FunctionEngine, engineKey, input.Payload)
 	duration := m.durationMillis(start)
 

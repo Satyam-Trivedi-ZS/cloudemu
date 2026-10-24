@@ -51,10 +51,13 @@ func (m *Mock) release(name string, token uint64) {
 }
 
 // removeDeployments tears down the engine deployments under keys on a cleanup
-// path, where the caller has nothing better to do with a failure. Callers hold
-// the function's engine reservation, not m.mu.
+// path, where the caller has nothing better to do with a failure. The function
+// no longer serves any of keys, so no new invocation pins them; each is removed
+// once the invocations already running on it finish. Callers hold the
+// function's engine reservation, not m.mu.
 func (m *Mock) removeDeployments(ctx context.Context, keys []string) {
 	for _, key := range keys {
+		m.pins.wait(key)
 		_ = funcengine.Remove(ctx, m.opts.FunctionEngine, key)
 	}
 }

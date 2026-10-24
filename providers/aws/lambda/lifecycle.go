@@ -58,10 +58,13 @@ func (m *Mock) beginCreateSettle(name string) {
 
 // beginUpdateSettle opens the LastUpdateStatus=InProgress window an
 // UpdateFunctionCode/UpdateFunctionConfiguration reports until the update
-// completes. A no-op unless AsyncSettle is on.
-func (m *Mock) beginUpdateSettle(name string) {
+// completes, and returns it. A no-op returning the inactive window unless
+// AsyncSettle is on.
+func (m *Mock) beginUpdateSettle(name string) settle.Window {
 	m.updateSettle.Begin(name, lastUpdateInProgress, m.opts.Clock.Now(),
 		m.opts.SettleDuration(settle.DefaultLambdaUpdateSettle))
+
+	return m.updateSettle.Window(name)
 }
 
 // clearSettle drops a deleted function's settle windows.
@@ -153,6 +156,11 @@ type priorRevision struct {
 	engineBacked bool
 	engineName   string
 	awsConfig    driver.AWSFunctionConfig
+	// window is the InProgress window of the update that replaced this
+	// revision. Keeping it here, rather than asking the shared settle set,
+	// makes a funcData copy self-consistent: a copy taken before a later update
+	// was committed never serves a revision that update retired.
+	window settle.Window
 }
 
 // engineKey is the FunctionEngine key fd's current code is deployed under.
@@ -197,8 +205,9 @@ func (m *Mock) updateEngineKey(fd *funcData) string {
 // update being committed completes. A no-op unless AsyncSettle is on. The
 // previous prior's update has completed (an update is refused while another is
 // InProgress), so its engine deployment is retired unless it is still the live
-// one. Callers hold m.mu and write fd back.
-func (m *Mock) keepPrior(fd *funcData) {
+// one. window is the InProgress window of the update being committed. Callers
+// hold m.mu and write fd back.
+func (m *Mock) keepPrior(fd *funcData, window settle.Window) {
 	if !m.updatesSettle() {
 		return
 	}
@@ -213,7 +222,7 @@ func (m *Mock) keepPrior(fd *funcData) {
 
 	fd.prior = &priorRevision{
 		info: info, engineBacked: fd.engineBacked, engineName: fd.engineName,
-		awsConfig: cloneAWSConfig(&fd.awsConfig),
+		awsConfig: cloneAWSConfig(&fd.awsConfig), window: window,
 	}
 }
 
@@ -255,9 +264,10 @@ func (fd *funcData) engineKeys() []string {
 // servePrior turns fd, a caller's copy, into what an invocation of
 // executedVersion runs: for $LATEST while an update is InProgress, the code and
 // configuration from before the update. Published versions are immutable and
-// never affected.
+// never affected. It reads only fd, so a copy taken at any moment serves a
+// revision that copy still holds.
 func (m *Mock) servePrior(fd *funcData, executedVersion string) {
-	if executedVersion != latestVersion || fd.prior == nil || !m.isUpdating(fd.info.Name) {
+	if executedVersion != latestVersion || fd.prior == nil || fd.prior.window.Settled(m.opts.Clock.Now()) {
 		return
 	}
 

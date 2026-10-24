@@ -86,20 +86,31 @@ func (m *Mock) publishVersion(
 		createdAt:   m.opts.Clock.Now().UTC().Format(time.RFC3339),
 		description: verDesc,
 		awsConfig:   cloneAWSConfig(&fd.awsConfig),
-		// Only the atomic Publish=true on CreateFunction can cut a version while
-		// the function is still Pending; a standalone PublishVersion is refused then.
-		cutWhilePending: !gate && m.isPending(functionName),
 	}
+	m.setVersionLifecycle(vd, functionName, gate)
 
-	// Likewise only Publish=true on UpdateFunctionCode cuts a version while an
-	// update is InProgress. That version settles together with the update.
-	if !gate && m.isUpdating(functionName) {
-		vd.updateWindow = m.updateSettle.Window(functionName)
-	}
 	fd.versions = append(fd.versions, vd)
 	m.funcs.Set(functionName, fd)
 
 	return m.versionResult(functionName, vd, ""), nil
+}
+
+// setVersionLifecycle records whether vd, being cut from function functionName,
+// reports Pending until a write completes. Only a version a write cut with
+// Publish=true (gate false) can: the one CreateFunction cut while the function
+// is still Pending, and the one UpdateFunctionCode cut while its update is
+// InProgress, which settles together with that update. A standalone
+// PublishVersion is refused in both states.
+func (m *Mock) setVersionLifecycle(vd *versionData, functionName string, gate bool) {
+	if gate {
+		return
+	}
+
+	vd.cutWhilePending = m.isPending(functionName)
+
+	if w := m.updateSettle.Window(functionName); !w.Settled(m.opts.Clock.Now()) {
+		vd.updateWindow = w
+	}
 }
 
 // versionResult renders a published version's driver.FunctionVersion, used both
