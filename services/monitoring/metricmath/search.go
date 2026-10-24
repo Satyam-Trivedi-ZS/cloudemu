@@ -195,7 +195,12 @@ func (t valueTerm) matches(m *driver.MetricIdentifier) bool {
 func (t valueTerm) fields(m *driver.MetricIdentifier) []string {
 	switch t.property {
 	case "":
-		out := []string{m.Namespace, m.MetricName}
+		// Namespace and metric name, then a key and a value per dimension.
+		const fieldsPerDimension = 2
+
+		out := make([]string, 0, fieldsPerDimension*(1+len(m.Dimensions)))
+		out = append(out, m.Namespace, m.MetricName)
+
 		for k, v := range m.Dimensions {
 			out = append(out, k, v)
 		}
@@ -277,9 +282,10 @@ func wordTokens(word string) []wantToken {
 
 // splitTokens returns the tokens of a field, in order, in their own case.
 func splitTokens(field string) []string {
-	var out []string
+	parts := alnumParts(field)
+	out := make([]string, 0, len(parts))
 
-	for _, part := range alnumParts(field) {
+	for _, part := range parts {
 		out = append(out, camelTokens(part)...)
 	}
 
