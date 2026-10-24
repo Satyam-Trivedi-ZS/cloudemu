@@ -464,6 +464,9 @@ func newProvider(o *config.Options, shared *GlobalServices) *Provider {
 	// EFS mount targets derive their VpcId and AZ from the subnet, so all mount
 	// targets of a file system share a VpcId and each reflects its subnet's zone.
 	p.EFS.SetSubnetResolver(p.VPC)
+	// A firewall's subnets sit in the zones the subnets really are in, and a firewall
+	// takes at most one subnet per zone.
+	p.NetworkFirewall.SetSubnetResolver(p.VPC)
 	p.EFS.SetMonitoring(p.CloudWatch)
 	// An IamInstanceProfile passed to RunInstances resolves through IAM so the
 	// role->profile->instance chain reads back on DescribeInstances.

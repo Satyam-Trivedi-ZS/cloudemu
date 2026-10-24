@@ -76,6 +76,8 @@ const (
 
 	DefaultBedrockIngestionSettle = 2 * time.Second // Bedrock KB ingestion job IN_PROGRESS->COMPLETE
 
+	DefaultFlowOperationSettle = 2 * time.Second // Network Firewall flow operation IN_PROGRESS->COMPLETED
+
 	DefaultExportTaskPendingSettle = 1 * time.Second // CloudWatch Logs export task PENDING->RUNNING
 	DefaultExportTaskRunSettle     = 2 * time.Second // CloudWatch Logs export task RUNNING->COMPLETED
 
