@@ -8,11 +8,17 @@ package metricmath
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"strconv"
 )
 
 // errMathParse marks a malformed expression. Callers treat it as no data.
 var errMathParse = errors.New("malformed metric math expression")
+
+// errSearchPeriod marks a SEARCH whose period argument is not a valid metric
+// period. It is a parse error, and InvalidSearchPeriod reports it.
+var errSearchPeriod = fmt.Errorf("%w: invalid SEARCH period", errMathParse)
 
 // parseExpression parses expr. ok is false when it is not in the supported
 // syntax.
@@ -537,7 +543,7 @@ func buildSearch(args []node) (node, error) {
 	if len(args) == searchMaxArgs {
 		period, ok := searchPeriod(args[2])
 		if !ok {
-			return nil, errMathParse
+			return nil, errSearchPeriod
 		}
 
 		n.period = period
@@ -546,14 +552,27 @@ func buildSearch(args []node) (node, error) {
 	return n, nil
 }
 
-// searchPeriod reads the period argument of SEARCH: a positive whole number.
+// searchPeriod reads the period argument of SEARCH: a valid metric period,
+// as ValidPeriod defines it. The range is checked on the float before the
+// conversion, so a value past the int range cannot wrap or saturate into an
+// accepted one.
 func searchPeriod(arg node) (int, bool) {
 	num, ok := arg.(numberNode)
-	if !ok || num.val <= 0 || num.val != float64(int(num.val)) {
+	if !ok || num.val < 1 || num.val > maxPeriodSeconds || num.val != math.Trunc(num.val) {
 		return 0, false
 	}
 
-	return int(num.val), true
+	return int(num.val), ValidPeriod(int(num.val))
+}
+
+// InvalidSearchPeriod reports whether expr calls SEARCH with a period
+// argument that is not a valid metric period. Such an expression reads no
+// data, and the API rejects it.
+func InvalidSearchPeriod(expr string) bool {
+	p := &mathParser{tokens: tokenizeMath(expr)}
+	_, err := p.parse()
+
+	return errors.Is(err, errSearchPeriod)
 }
 
 // hasString reports whether a string literal is used where a value belongs.

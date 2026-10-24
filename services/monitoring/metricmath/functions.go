@@ -157,10 +157,7 @@ func (n fillNode) evaluate(s scope) (result, error) {
 	grid := s.e.grid(step)
 
 	if in.isArray {
-		out := mapArray(in.array, func(r result) result { return result{series: f.apply(r.series, grid)} })
-		out.period = in.period
-
-		return out, nil
+		return mapArray(&in, func(r result) result { return result{series: f.apply(r.series, grid)} }), nil
 	}
 
 	return result{series: f.apply(in.series, grid)}, nil
@@ -198,19 +195,30 @@ type filler struct {
 // grid returns the timestamps of every period in the evaluator's range,
 // aligned to its start as the metric reads are. It is nil when the range or
 // the period is unknown, or the range holds more than maxFillPoints periods.
+//
+// It counts in whole seconds and never multiplies the period itself into a
+// Duration, so any period, however large, gives a bounded grid: every offset
+// it builds is at most the length of the range.
 func (e *Evaluator) grid(period int) []time.Time {
 	if period <= 0 || e.start.IsZero() || !e.end.After(e.start) {
 		return nil
 	}
 
-	step := time.Duration(period) * time.Second
-	if e.end.Sub(e.start)/step > maxFillPoints {
+	step := int64(period)
+
+	last := int64(e.end.Sub(e.start)/time.Second) / step
+	if last > maxFillPoints {
 		return nil
 	}
 
-	var out []time.Time
+	out := make([]time.Time, 0, last+1)
 
-	for ts := e.start; ts.Before(e.end); ts = ts.Add(step) {
+	for i := range last + 1 {
+		ts := e.start.Add(time.Duration(i*step) * time.Second)
+		if !ts.Before(e.end) {
+			break
+		}
+
 		out = append(out, ts)
 	}
 

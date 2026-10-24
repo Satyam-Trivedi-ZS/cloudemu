@@ -57,16 +57,18 @@ func (r *result) labeled() []Labeled {
 	return []Labeled{{Series: r.asSeries()}}
 }
 
-// mapArray applies f to each series of an array, keeping the labels.
-func mapArray(arr []Labeled, f func(result) result) result {
-	out := make([]Labeled, 0, len(arr))
+// mapArray applies f to each series of the array in, keeping the labels and
+// the period of the series, so a FILL further out still fills on the step a
+// SEARCH read at.
+func mapArray(in *result, f func(result) result) result {
+	out := make([]Labeled, 0, len(in.array))
 
-	for _, l := range arr {
+	for _, l := range in.array {
 		r := f(result{series: l.Series})
 		out = append(out, Labeled{Label: l.Label, Series: r.asSeries()})
 	}
 
-	return result{isArray: true, array: out}
+	return result{isArray: true, array: out, period: in.period}
 }
 
 // pointFunc combines two values into one. ok is false when the point is
@@ -84,9 +86,9 @@ func pointwise(f pointFunc, left, right *result) result {
 		// TS[] op TS[] is not a documented form.
 		return result{series: emptySeries()}
 	case left.isArray:
-		return mapArray(left.array, func(l result) result { return pointwise(f, &l, right) })
+		return mapArray(left, func(l result) result { return pointwise(f, &l, right) })
 	case right.isArray:
-		return mapArray(right.array, func(r result) result { return pointwise(f, left, &r) })
+		return mapArray(right, func(r result) result { return pointwise(f, left, &r) })
 	case left.isScalar && right.isScalar:
 		v, ok := f(left.scalar, right.scalar)
 		if !ok {

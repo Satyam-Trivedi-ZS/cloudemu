@@ -95,8 +95,13 @@ type periodValidator interface {
 }
 
 // validateQueryPeriods checks the MetricStat Period and the optional Period
-// of every query, including ones that return no data.
+// of every query, including ones that return no data, and the period
+// argument of every SEARCH.
 func (h *Handler) validateQueryPeriods(queries []metricDataQueryCBR) error {
+	if err := validateSearchPeriods(queries); err != nil {
+		return err
+	}
+
 	v, ok := h.monitoring.(periodValidator)
 	if !ok {
 		return nil
@@ -115,6 +120,19 @@ func (h *Handler) validateQueryPeriods(queries []metricDataQueryCBR) error {
 			if err := v.ValidatePeriod(member+".Period", p); err != nil {
 				return invalidParameterError(err)
 			}
+		}
+	}
+
+	return nil
+}
+
+// validateSearchPeriods rejects an expression whose SEARCH period argument
+// is not a valid metric period, the same rule a MetricStat Period follows.
+func validateSearchPeriods(queries []metricDataQueryCBR) error {
+	for i := range queries {
+		if metricmath.InvalidSearchPeriod(queries[i].Expression) {
+			return newWireError(errValidation, "Error in expression '"+queries[i].ID+
+				"': Invalid SEARCH period. Valid periods are 1, 5, 10, 20, 30, 60 and any multiple of 60.")
 		}
 	}
 

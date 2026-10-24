@@ -146,6 +146,8 @@ func TestSDKGetMetricDataFILLOverSEARCHNoPeriod(t *testing.T) {
 		{"explicit period", `FILL(SEARCH('{FillSearch,Host} MetricName="Hits"', 'Sum', 300), 0)`, []float64{0, 4, 0, 0}},
 		{"default period", `FILL(SEARCH('{FillSearch,Host} MetricName="Hits"', 'Sum'), 0)`,
 			[]float64{0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+		{"arithmetic over SEARCH", `FILL(SEARCH('{FillSearch,Host} MetricName="Hits"', 'Sum', 300) * 2, 0)`,
+			[]float64{0, 8, 0, 0}},
 	}
 
 	for _, tc := range tests {
@@ -204,10 +206,18 @@ func TestSDKGetMetricDataArithmeticMissingAsZero(t *testing.T) {
 
 	want := map[string][]float64{"diff": {10, 20, -20, 0}, "ratio": {1.5, 0}}
 
+	got := make(map[string][]float64, len(out.MetricDataResults))
 	for _, r := range out.MetricDataResults {
-		id := aws.ToString(r.Id)
-		if !floatsEqual(r.Values, want[id]) {
-			t.Errorf("%s values = %v, want %v", id, r.Values, want[id])
+		got[aws.ToString(r.Id)] = r.Values
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("results = %v, want %v", got, want)
+	}
+
+	for id, v := range want {
+		if values, ok := got[id]; !ok || !floatsEqual(values, v) {
+			t.Errorf("%s values = %v (returned %t), want %v", id, values, ok, v)
 		}
 	}
 }
