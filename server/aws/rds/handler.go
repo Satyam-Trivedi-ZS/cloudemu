@@ -450,7 +450,7 @@ var notFoundFaults = []faultMapping{
 	{"parameter group", "DBParameterGroupNotFound"},
 	{"option group", "OptionGroupNotFoundFault"},
 	{"DB proxy", "DBProxyNotFoundFault"},
-	{"event subscription", "SubscriptionNotFoundFault"},
+	{"event subscription", "SubscriptionNotFound"},
 	{"DB cluster endpoint", "DBClusterEndpointNotFoundFault"},
 	{"global cluster", "GlobalClusterNotFoundFault"},
 	{"DB instance", "DBInstanceNotFound"},
@@ -466,7 +466,7 @@ var alreadyExistsFaults = []faultMapping{
 	{"parameter group", "DBParameterGroupAlreadyExists"},
 	{"option group", "OptionGroupAlreadyExistsFault"},
 	{"DB proxy", "DBProxyAlreadyExistsFault"},
-	{"event subscription", "SubscriptionAlreadyExistFault"},
+	{"event subscription", "SubscriptionAlreadyExist"},
 	{"DB cluster endpoint", "DBClusterEndpointAlreadyExistsFault"},
 	{"global cluster", "GlobalClusterAlreadyExistsFault"},
 	{"DB instance", "DBInstanceAlreadyExists"},
@@ -493,12 +493,16 @@ var invalidStateFaults = []faultMapping{
 
 // invalidArgumentFaults maps an invalid-argument error to the AWS-shaped fault
 // code. A rule that one parameter requires another ("X is supplied, Y must
-// also be provided") is InvalidParameterCombination in real RDS; every other
+// also be provided"), or a parameter group whose family does not fit the
+// engine version, is InvalidParameterCombination in real RDS; every other
 // invalid argument is InvalidParameterValue.
 //
 //nolint:gochecknoglobals // ordered static lookup table
 var invalidArgumentFaults = []faultMapping{
 	{"must also be provided", "InvalidParameterCombination"},
+	{"can't be used for this instance", "InvalidParameterCombination"},
+	{"You must explicitly specify a new DB instance parameter group", "InvalidParameterCombination"},
+	{"valid in combination with AllowMajorVersionUpgrade", "InvalidParameterCombination"},
 }
 
 // invalidArgumentCode picks the AWS-shaped invalid-argument fault from the

@@ -741,6 +741,12 @@ func (m *Mock) ModifyInstance(
 		return nil, err
 	}
 
+	// The parameter group the request leaves the instance on must belong to the
+	// family of the version it asks for, checked up front as RDS does.
+	if err := m.checkInstanceModifyGroup(&inst, &input); err != nil {
+		return nil, err
+	}
+
 	// ApplyImmediately (default false) governs the deferrable resize/version/
 	// password/storage changes. When set they take effect now and clear any
 	// pending changes; otherwise they are recorded in PendingModifiedValues and
@@ -1308,9 +1314,18 @@ func (m *Mock) ModifyCluster(
 		return nil, err
 	}
 
+	members, err := m.clusterMemberUpgrades(&cluster, &input)
+	if err != nil {
+		return nil, err
+	}
+
 	applyClusterModify(&cluster, input)
 
 	m.clusters.Set(id, cluster)
+
+	for i := range members {
+		m.instances.Set(members[i].ID, members[i])
+	}
 
 	out := cluster
 

@@ -250,14 +250,26 @@ func (m *Mock) DescribeDBParameters(_ context.Context, name string) ([]rdsdriver
 
 // defaultGroupFamily extracts the family from a "default.<family>" group name
 // (e.g. "default.mysql8.0" -> "mysql8.0"). RDS provides one such always-present
-// group per engine family.
+// group per engine family, so only a known family counts: "default.bogus" is
+// not a group and stays DBParameterGroupNotFound.
 func defaultGroupFamily(name string) (string, bool) {
-	const prefix = "default."
-	if !strings.HasPrefix(name, prefix) {
+	family, ok := strings.CutPrefix(name, "default.")
+	if !ok || !isKnownFamily(family) {
 		return "", false
 	}
 
-	return strings.TrimPrefix(name, prefix), true
+	return family, true
+}
+
+// dbParameterGroupFamily returns the family of the DB parameter group named
+// name: a stored group's family, or the family of a "default.<family>" group.
+// It reports false for a name that is neither. The caller holds m.mu.
+func (m *Mock) dbParameterGroupFamily(name string) (string, bool) {
+	if pg, ok := m.paramGroups.Get(name); ok {
+		return pg.Family, pg.Family != ""
+	}
+
+	return defaultGroupFamily(name)
 }
 
 //nolint:dupl // structurally mirrors its sibling per-resource block by design.

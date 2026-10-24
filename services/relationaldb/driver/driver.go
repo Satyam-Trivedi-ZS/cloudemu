@@ -286,7 +286,11 @@ type ModifyInstanceInput struct {
 	DBParameterGroupName        string
 	OptionGroupName             string
 	DBClusterParameterGroupName string
-	ElasticPoolID               string
+	// DBInstanceParameterGroupName is the AWS RDS ModifyDBCluster input that
+	// moves every instance of an Aurora cluster to this DB parameter group on a
+	// major version upgrade; empty means "no change". Other engines ignore it.
+	DBInstanceParameterGroupName string
+	ElasticPoolID                string
 	// MinimalTLSVersion / PublicNetworkAccess / RestrictOutboundNetworkAccess
 	// update the Azure SQL logical-server properties on a PATCH; empty means "no
 	// change". Other engines ignore them.

@@ -129,6 +129,42 @@ func versionedFamily(engine string, major, minor int) string {
 	}
 }
 
+// isKnownFamily reports whether family is a DB parameter group family that
+// parameterGroupFamily produces for some engine and version: the family names
+// a recognized engine followed by a version it could come from (postgres16,
+// mysql8.0, aurora-postgresql15, oracle-ee-19, sqlserver-ee-15.0, neptune1,
+// db2-se). It rejects names such as "bogus", "postgres16.2" or
+// "postgres-16", so "default.<family>" groups resolve only for real families.
+func isKnownFamily(family string) bool {
+	for engine := range validEngines {
+		if familyFromEngine(engine, family) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// familyFromEngine reports whether family is the family of engine at the
+// version spelled by the rest of the name ("16" or "16.0" for postgres16).
+func familyFromEngine(engine, family string) bool {
+	if family == engine {
+		return parameterGroupFamily(engine, "") == family
+	}
+
+	rest, ok := strings.CutPrefix(family, engine)
+	if !ok {
+		return false
+	}
+
+	rest = strings.TrimPrefix(rest, "-")
+	if !strings.Contains(rest, ".") {
+		rest += ".0"
+	}
+
+	return parameterGroupFamily(engine, rest) == family
+}
+
 // neptuneFamily returns the Neptune family: neptune1 for every release before
 // 1.2.0.0, then neptune<major>.<minor>.
 func neptuneFamily(major, minor int) string {

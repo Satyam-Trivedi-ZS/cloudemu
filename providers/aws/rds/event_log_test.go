@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stackshy/cloudemu/v2/config"
+	cerrors "github.com/stackshy/cloudemu/v2/errors"
 	snsdriver "github.com/stackshy/cloudemu/v2/services/notification/driver"
 	rdsdriver "github.com/stackshy/cloudemu/v2/services/relationaldb/driver"
 )
@@ -272,4 +273,69 @@ func assertStrings(t *testing.T, want, got []string) {
 	if !slices.Equal(want, got) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
+}
+
+// TestTagsOnEventSubscriptionAndDefaultGroup: the "es:" ARN of an event
+// subscription and the ARN of a synthesized default parameter group are
+// taggable, as Terraform's aws_db_event_subscription requires.
+func TestTagsOnEventSubscriptionAndDefaultGroup(t *testing.T) {
+	ctx := context.Background()
+	m, _ := newEventTestMock()
+
+	sub, err := m.CreateEventSubscription(ctx, rdsdriver.EventSubscriptionConfig{
+		Name: "tfsub", SnsTopicARN: "arn:aws:sns:us-east-1:123456789012:t", Enabled: true,
+		Tags: map[string]string{"env": "dev"},
+	})
+	requireNoError(t, err)
+
+	tags, err := m.ListTagsForResource(ctx, sub.ARN)
+	requireNoError(t, err)
+	assertEqual(t, "dev", tags["env"])
+
+	requireNoError(t, m.AddTagsToResource(ctx, sub.ARN, map[string]string{"team": "db"}))
+	requireNoError(t, m.RemoveTagsFromResource(ctx, sub.ARN, []string{"env"}))
+
+	tags, err = m.ListTagsForResource(ctx, sub.ARN)
+	requireNoError(t, err)
+	assertEqual(t, 1, len(tags))
+	assertEqual(t, "db", tags["team"])
+
+	_, err = m.DeleteEventSubscription(ctx, "tfsub")
+	requireNoError(t, err)
+
+	_, err = m.ListTagsForResource(ctx, sub.ARN)
+	requireCode(t, err, cerrors.IsNotFound)
+
+	// A re-created subscription of the same name starts untagged.
+	_, err = m.CreateEventSubscription(ctx, rdsdriver.EventSubscriptionConfig{
+		Name: "tfsub", SnsTopicARN: "arn:aws:sns:us-east-1:123456789012:t", Enabled: true,
+	})
+	requireNoError(t, err)
+
+	tags, err = m.ListTagsForResource(ctx, sub.ARN)
+	requireNoError(t, err)
+	assertEqual(t, 0, len(tags))
+
+	pgARN := parameterGroupARN("us-east-1", "123456789012", "default.postgres15")
+
+	tags, err = m.ListTagsForResource(ctx, pgARN)
+	requireNoError(t, err)
+	assertEqual(t, 0, len(tags))
+}
+
+// TestDescribeEventsSourceRulesInProvider: a library caller gets the same
+// SourceType / SourceIdentifier validation the wire returns.
+func TestDescribeEventsSourceRulesInProvider(t *testing.T) {
+	ctx := context.Background()
+	m, _ := newEventTestMock()
+
+	_, err := m.DescribeEvents(ctx, rdsdriver.DescribeEventsInput{SourceIdentifier: "db1"})
+	requireCode(t, err, cerrors.IsInvalidArgument)
+	assertEqual(t, errSourceIdentifierWithoutType, err.(*cerrors.Error).Message) //nolint:errorlint // cerrors.New returns *Error.
+
+	_, err = m.DescribeEvents(ctx, rdsdriver.DescribeEventsInput{SourceType: "db-bogus"})
+	requireCode(t, err, cerrors.IsInvalidArgument)
+
+	_, err = m.DescribeEvents(ctx, rdsdriver.DescribeEventsInput{SourceType: "db-instance", SourceIdentifier: "db1"})
+	requireNoError(t, err)
 }

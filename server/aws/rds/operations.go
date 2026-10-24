@@ -552,13 +552,14 @@ func (h *Handler) modifyDBCluster(w http.ResponseWriter, r *http.Request) {
 	id := form.Get("DBClusterIdentifier")
 
 	input := rdsdriver.ModifyInstanceInput{
-		EngineVersion:               form.Get("EngineVersion"),
-		MasterUserPassword:          form.Get("MasterUserPassword"),
-		DBClusterParameterGroupName: form.Get("DBClusterParameterGroupName"),
-		BackupRetentionPeriod:       formInt(form.Get("BackupRetentionPeriod")),
-		PreferredBackupWindow:       form.Get("PreferredBackupWindow"),
-		PreferredMaintenanceWindow:  form.Get("PreferredMaintenanceWindow"),
-		Tags:                        parseRDSTags(form),
+		EngineVersion:                form.Get("EngineVersion"),
+		MasterUserPassword:           form.Get("MasterUserPassword"),
+		DBClusterParameterGroupName:  form.Get("DBClusterParameterGroupName"),
+		DBInstanceParameterGroupName: form.Get("DBInstanceParameterGroupName"),
+		BackupRetentionPeriod:        formInt(form.Get("BackupRetentionPeriod")),
+		PreferredBackupWindow:        form.Get("PreferredBackupWindow"),
+		PreferredMaintenanceWindow:   form.Get("PreferredMaintenanceWindow"),
+		Tags:                         parseRDSTags(form),
 	}
 
 	if v := form.Get("DeletionProtection"); v != "" {

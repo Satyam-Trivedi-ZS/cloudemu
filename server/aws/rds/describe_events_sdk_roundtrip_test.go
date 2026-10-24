@@ -4,6 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +16,9 @@ import (
 	awsrds "github.com/aws/aws-sdk-go-v2/service/rds"
 	rdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
 	"github.com/aws/smithy-go"
+
+	"github.com/stackshy/cloudemu/v2"
+	awsserver "github.com/stackshy/cloudemu/v2/server/aws"
 )
 
 // TestSDKRDSDescribeEventsWindowAndPaging covers DescribeEvents over the wire:
@@ -111,5 +119,54 @@ func TestSDKRDSDescribeEventsWindowAndPaging(t *testing.T) {
 		if !errors.As(err, &apiErr) || apiErr.ErrorCode() != tc.code {
 			t.Fatalf("DescribeEvents %+v: want %s, got %v", tc.in, tc.code, err)
 		}
+	}
+}
+
+// TestWireDescribeEventsRejectsMalformedTimes: a raw query client sending a
+// timestamp or Duration that does not parse gets InvalidParameterValue, not
+// the default window. The SourceIdentifier-without-SourceType rule, now
+// enforced by the provider, still surfaces as InvalidParameterCombination.
+func TestWireDescribeEventsRejectsMalformedTimes(t *testing.T) {
+	ts := httptest.NewServer(awsserver.New(awsserver.Drivers{RDS: cloudemu.NewAWS().RDS}))
+	t.Cleanup(ts.Close)
+
+	cases := []struct {
+		name     string
+		extra    url.Values
+		wantCode string
+	}{
+		{"bad StartTime", url.Values{"StartTime": {"garbage"}}, "InvalidParameterValue"},
+		{"bad EndTime", url.Values{"EndTime": {"2025-13-45"}}, "InvalidParameterValue"},
+		{"bad Duration", url.Values{"Duration": {"ten"}}, "InvalidParameterValue"},
+		{"id without type", url.Values{"SourceIdentifier": {"db1"}}, "InvalidParameterCombination"},
+		{"bogus type", url.Values{"SourceType": {"db-bogus"}}, "InvalidParameterValue"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			form := url.Values{"Action": {"DescribeEvents"}, "Version": {"2014-10-31"}}
+			for k, v := range tc.extra {
+				form[k] = v
+			}
+
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL,
+				strings.NewReader(form.Encode()))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "<Code>"+tc.wantCode+"</Code>") {
+				t.Fatalf("status %d body %s, want 400 %s", resp.StatusCode, body, tc.wantCode)
+			}
+		})
 	}
 }
